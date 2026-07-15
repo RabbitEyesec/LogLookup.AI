@@ -1,0 +1,75 @@
+# Generic JSON/CSV file event -> OCSF DetectionFinding mapping.
+# Portable adapter for tests and demos; accepts ECS-style and plain names.
+source: file
+
+timestamp:
+  fields:
+    - "@timestamp"
+    - timestamp
+    - time
+    - event_time
+    - date
+  default_offset_minutes: 0
+
+severity:
+  fields:
+    - severity
+    - severity_id
+    - event.severity
+
+fields:
+  - target: finding_info.title
+    sources: [rule.name, rule_name, rule, title, alert_name]
+    default: Unknown finding
+  - target: finding_info.uid
+    sources: [id, alert_id, event.id, uuid]
+  - target: finding_info.desc
+    sources: [description, rule.description]
+  - target: message
+    sources: [message, reason]
+  - target: device.hostname
+    sources: [host.name, hostname, host]
+  - target: device.ip
+    sources: [host.ip, host_ip]
+    transform: first
+  - target: device.mac
+    sources: [host.mac, mac]
+    transform: first
+  - target: device.uid
+    sources: [agent.id, agent_id, host.id]
+  - target: actor.user.name
+    sources: [user.name, username, user]
+  - target: actor.user.email_addr
+    sources: [user.email, email, upn]
+  - target: actor.user.domain
+    sources: [user.domain]
+  - target: actor.process.uid
+    sources: [process.entity_id, process_guid]
+  - target: actor.process.pid
+    sources: [process.pid, pid]
+    transform: int
+  - target: actor.process.name
+    sources: [process.name]
+  - target: actor.process.cmd_line
+    sources: [process.command_line, command_line]
+  - target: src_endpoint.ip
+    sources: [source.ip, src_ip, source_ip]
+  - target: src_endpoint.port
+    sources: [source.port, src_port]
+    transform: int
+  - target: dst_endpoint.ip
+    sources: [destination.ip, dst_ip, dest_ip]
+  - target: dst_endpoint.port
+    sources: [destination.port, dst_port]
+    transform: int
+  - target: metadata.product.vendor_name
+    sources: [vendor, event.provider]
+    default: file
+  - target: metadata.event_code
+    sources: [event.code, event_code]
+
+attacks:
+  tactic_name: [threat.tactic.name, tactic_name, tactic]
+  tactic_uid: [threat.tactic.id, tactic_id]
+  technique_uid: [threat.technique.id, technique_id, technique]
+  technique_name: [threat.technique.name, technique_name]

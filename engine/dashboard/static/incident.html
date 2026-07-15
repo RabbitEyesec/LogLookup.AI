@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LogLookup AI | Attack Chain</title>
+  <link rel="stylesheet" href="/static/theme.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' fill='%23000'/%3E%3Cpath d='M 8 32 L 20 20 L 20 8 L 32 20' fill='none' stroke='%2300E676' stroke-width='3'/%3E%3C/svg%3E" />
+</head>
+<body class="ide-lock">
+  <div class="ide" id="ide">
+
+    <!-- Zone 1 — context & navigation -->
+    <nav class="zone-nav" aria-label="Navigation">
+      <div class="brand">
+        <svg class="logo-mark" width="26" height="26" viewBox="0 0 40 40" aria-hidden="true">
+          <circle cx="8" cy="8" r="1.5" fill="#333333"/><circle cx="20" cy="8" r="1.5" fill="#333333"/><circle cx="32" cy="8" r="1.5" fill="#333333"/>
+          <circle cx="8" cy="20" r="1.5" fill="#333333"/><circle cx="20" cy="20" r="1.5" fill="#333333"/><circle cx="32" cy="20" r="1.5" fill="#333333"/>
+          <circle cx="8" cy="32" r="1.5" fill="#333333"/><circle cx="20" cy="32" r="1.5" fill="#333333"/><circle cx="32" cy="32" r="1.5" fill="#333333"/>
+          <path d="M 8 32 L 20 20 L 20 8 L 32 20" fill="none" stroke="#00E676" stroke-width="1.5" stroke-linejoin="miter"/>
+          <rect x="6.5" y="30.5" width="3" height="3" fill="#00E676"/><rect x="18.5" y="18.5" width="3" height="3" fill="#00E676"/>
+          <rect x="18.5" y="6.5" width="3" height="3" fill="#00E676"/><rect x="30.5" y="18.5" width="3" height="3" fill="#00E676"/>
+        </svg>
+        <span>LOGLOOKUP<span class="ai">.AI</span></span>
+      </div>
+
+      <div class="nav-section">INVESTIGATIONS</div>
+      <div class="nav-item active" id="nav-active" role="button" tabindex="0">
+        Active Incidents <span class="count calm" id="count-active">0</span>
+      </div>
+      <div class="nav-item" id="nav-all" role="button" tabindex="0">
+        All Chains <span class="count calm" id="count-all">0</span>
+      </div>
+      <div class="nav-item" id="nav-triaged" role="button" tabindex="0">
+        AI Triaged <span class="count calm" id="count-triaged">0</span>
+      </div>
+
+      <div class="nav-section">FILTERS</div>
+      <div class="nav-filter">
+        <label>Severity</label>
+        <div class="seg" id="filter-sev">
+          <button data-v="" class="on">All</button>
+          <button data-v="high">High+</button>
+          <button data-v="critical">Crit</button>
+        </div>
+      </div>
+      <div class="nav-filter">
+        <label>Verdict</label>
+        <div class="seg" id="filter-verdict">
+          <button data-v="" class="on">All</button>
+          <button data-v="tp">TP</button>
+          <button data-v="esc">Esc</button>
+          <button data-v="pending">Pend</button>
+        </div>
+      </div>
+      <div class="nav-filter">
+        <label>Time</label>
+        <div class="seg" id="filter-time">
+          <button data-v="">All</button>
+          <button data-v="24" class="on">24h</button>
+          <button data-v="168">7d</button>
+        </div>
+      </div>
+
+      <div class="nav-foot">
+        <div class="sys-row"><span class="dot" id="sys-siem-dot"></span><span class="lbl">SIEM</span><span class="val" id="sys-siem">—</span></div>
+        <div class="sys-row"><span class="dot" id="sys-ai-dot"></span><span class="lbl">AI</span><span class="val" id="sys-ai">—</span></div>
+        <div class="sys-row"><span class="dot" id="sys-kb-dot"></span><span class="lbl">ATT&amp;CK</span><span class="val" id="sys-kb">—</span></div>
+        <div class="row" style="margin-top:6px">
+          <button id="btn-settings" style="flex:1">Settings</button>
+          <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Zone 2 — timeline & tabbed evidence -->
+    <main class="zone-center no-evidence" id="zone-center">
+      <header class="incident-header" id="incident-header">
+        <div class="incident-heading">
+          <h1 id="hdr-title">Incidents</h1>
+          <span id="hdr-chain-id" hidden></span>
+        </div>
+        <span id="hdr-chips" style="display:flex;gap:8px;align-items:center;min-width:0;overflow:hidden"></span>
+        <span class="spacer"></span>
+        <div class="seg" id="center-view" hidden>
+          <button data-v="table" class="on">Events</button>
+          <button data-v="lanes">MITRE Lanes</button>
+        </div>
+        <input class="global-search" id="global-search" type="search"
+               aria-label="Search incidents and evidence"
+               placeholder="Search rule, host, user, command, MITRE, IP…  ⌘F" />
+      </header>
+
+      <div class="grid-wrap" id="grid-wrap">
+        <div class="state" id="center-state" hidden></div>
+        <table class="grid" id="main-grid" hidden>
+          <thead><tr id="grid-head"></tr></thead>
+          <tbody id="grid-body"></tbody>
+        </table>
+        <div id="lane-wrap" hidden style="padding:10px 14px">
+          <svg id="timeline-svg" width="100%" height="380"></svg>
+        </div>
+      </div>
+
+      <div class="splitter splitter-horizontal" id="evidence-resizer"
+           role="separator" aria-orientation="horizontal" tabindex="0"
+           aria-label="Resize event list and evidence panel"></div>
+      <section class="evidence" id="evidence" aria-label="Evidence">
+        <div class="tabs" id="evidence-tabs">
+          <button data-tab="evidence" class="active">Evidence</button>
+          <button data-tab="raw">Raw JSON</button>
+          <button data-tab="correlation">Correlation</button>
+          <button data-tab="verdict">AI Verdict</button>
+          <button data-tab="report">Case Report</button>
+          <span class="tab-fill"></span>
+          <span class="tab-meta" id="evidence-meta"></span>
+        </div>
+        <div class="evidence-body" id="evidence-body"></div>
+      </section>
+    </main>
+
+    <!-- Zone 3 — tri-split intelligence -->
+    <div class="splitter splitter-vertical" id="rail-resizer" role="separator"
+         aria-orientation="vertical" tabindex="0"
+         aria-label="Resize event workspace and intelligence panels"></div>
+    <aside class="zone-rail" aria-label="Intelligence">
+      <section class="pane pane-graph">
+        <div class="pane-head">
+          ATTACK GRAPH
+          <span class="spacer"></span>
+          <div class="seg" id="graph-mode">
+            <button data-v="2d" class="on">2D</button>
+            <button data-v="3d">3D</button>
+          </div>
+        </div>
+        <div class="pane-body">
+          <div id="graph2d"></div>
+          <div id="graph3d" hidden></div>
+          <div class="state" id="graph-state"><p>Select an incident to render its attack graph.</p></div>
+        </div>
+      </section>
+
+      <div class="splitter splitter-horizontal" id="graph-resizer"
+           role="separator" aria-orientation="horizontal" tabindex="0"
+           aria-label="Resize attack graph and AI verdict"></div>
+
+      <section class="pane pane-verdict">
+        <div class="pane-head">&gt;&gt; AI VERDICT</div>
+        <div class="pane-body" id="verdict-body">
+          <div class="state"><p>No incident selected.</p></div>
+        </div>
+      </section>
+
+      <div class="splitter splitter-horizontal" id="verdict-resizer"
+           role="separator" aria-orientation="horizontal" tabindex="0"
+           aria-label="Resize AI verdict and entity context"></div>
+
+      <section class="pane pane-entity">
+        <div class="pane-head">ENTITY CONTEXT</div>
+        <div class="pane-body" id="entity-body">
+          <div class="state"><p>Select an event or a graph node.</p></div>
+        </div>
+      </section>
+    </aside>
+
+    <!-- Zone 4 — command execution -->
+    <footer class="zone-cmd">
+      <span class="prompt">&gt;</span>
+      <input id="cmd-input" autocomplete="off" spellcheck="false"
+             placeholder="Type / for commands" />
+      <span class="cmd-hint">Tab to complete. Enter to execute. <kbd>⌘K</kbd> for palette.</span>
+      <div class="pivots">
+        <button id="pivot-host" disabled>Pivot Host</button>
+        <button id="pivot-user" disabled>Pivot User</button>
+        <button id="pivot-ip" disabled>Pivot IP</button>
+        <button id="btn-export" class="primary" disabled
+                aria-haspopup="menu" aria-expanded="false">Export ▾</button>
+      </div>
+      <div class="cmd-suggest" id="cmd-suggest" hidden></div>
+    </footer>
+  </div>
+
+  <!-- Command palette -->
+  <div class="palette-scrim" id="palette-scrim"></div>
+  <div class="palette" id="palette" role="dialog" aria-label="Command palette">
+    <input id="palette-input" placeholder="Jump to an incident or run a command…" autocomplete="off" spellcheck="false" />
+    <div class="results" id="palette-results"></div>
+  </div>
+
+  <!-- Settings drawer -->
+  <div class="drawer-scrim" id="drawer-scrim"></div>
+  <aside class="drawer" id="settings-drawer" aria-label="Settings">
+    <h2>&gt;&gt; SETTINGS</h2>
+    <h3>AI PROVIDER (changes apply without a restart)</h3>
+    <label class="field">Provider
+      <select id="set-provider">
+        <option value="local">Local (Ollama; data stays on this machine)</option>
+        <option value="anthropic">Anthropic (cloud API)</option>
+        <option value="openai">OpenAI (cloud API)</option>
+      </select>
+    </label>
+    <label class="field" data-for="local">Local model
+      <input id="set-local-model" placeholder="foundation-sec-8b" />
+    </label>
+    <label class="field" data-for="local">Ollama endpoint
+      <input id="set-local-url" placeholder="http://localhost:11434" />
+    </label>
+    <label class="field" data-for="cloud">Cloud model
+      <input id="set-cloud-model" placeholder="provider default" />
+    </label>
+    <label class="field" data-for="cloud">API key
+      <input id="set-cloud-key" type="password" placeholder="unchanged if left blank" autocomplete="off" />
+    </label>
+    <label class="field">Triage scope
+      <select id="set-scope">
+        <option value="surfaced">surfaced chains only</option>
+        <option value="all">all chains</option>
+      </select>
+    </label>
+    <label class="field">Model timeout (seconds)
+      <input id="set-timeout" type="number" min="10" max="3600" />
+    </label>
+    <div class="row">
+      <button class="primary" id="set-apply">Apply</button>
+      <button id="set-validate" title="Sends a short test request to the selected provider">Validate</button>
+      <button id="set-close">Close</button>
+    </div>
+    <div class="notice" id="set-result" hidden></div>
+
+    <h3 id="siem-settings-head">SIEM CONNECTION</h3>
+    <div id="siem-settings">
+      <label class="field">Elasticsearch URL
+        <input id="set-siem-host" placeholder="https://localhost:9200" />
+      </label>
+      <label class="field">API key
+        <input id="set-siem-key" type="password" placeholder="unchanged if left blank" autocomplete="off" />
+      </label>
+      <label class="field">Alert index
+        <input id="set-siem-index" placeholder=".alerts-security" />
+      </label>
+      <label class="field">TLS certificate verification
+        <select id="set-siem-tls">
+          <option value="system">System trust store</option>
+          <option value="custom">Custom CA certificate</option>
+          <option value="insecure">Skip verification (lab only)</option>
+        </select>
+      </label>
+      <label class="field" id="set-siem-ca-field" hidden>Custom CA path
+        <input id="set-siem-ca-path" placeholder="/etc/loglookup/elastic-ca.pem" />
+        <input id="set-siem-ca-file" type="file" accept=".pem,.crt,.cer" />
+      </label>
+      <div class="notice error" id="set-siem-tls-warning" hidden>
+        Warning: skipping TLS verification permits man-in-the-middle attacks.
+        Use only in an isolated lab.
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="primary" id="set-siem-apply">Apply SIEM</button>
+      </div>
+      <div class="notice" id="set-siem-result" hidden style="margin-top:8px"></div>
+    </div>
+  </aside>
+
+  <div class="export-menu" id="export-menu" role="menu" hidden>
+    <button role="menuitem" data-export="markdown">Markdown case report</button>
+    <button role="menuitem" data-export="json">JSON evidence bundle</button>
+    <button role="menuitem" data-export="soc">SOC report</button>
+    <button role="menuitem" data-export="executive">Executive report</button>
+    <button role="menuitem" data-export="pdf">PDF / Print</button>
+  </div>
+
+  <!-- Shortcuts overlay -->
+  <div class="palette" id="help-overlay" role="dialog" aria-label="Keyboard shortcuts" style="padding:18px 20px">
+    <h2 style="font-family:var(--font-mono);font-size:11px;letter-spacing:1px;color:var(--signal);margin-bottom:14px">&gt;&gt; KEYBOARD</h2>
+    <div class="shortcuts-grid">
+      <kbd>⌘K</kbd><span>Command palette</span>
+      <kbd>⌘F</kbd><span>Search</span>
+      <kbd>/</kbd><span>Command bar</span>
+      <kbd>j / k</kbd><span>Next / previous row</span>
+      <kbd>Enter</kbd><span>Open selected incident</span>
+      <kbd>Esc</kbd><span>Back / close</span>
+      <kbd>1–5</kbd><span>Evidence tabs</span>
+      <kbd>g</kbd><span>Toggle 2D / 3D graph</span>
+      <kbd>t</kbd><span>Toggle events / MITRE lanes</span>
+      <kbd>r</kbd><span>Re-run AI triage</span>
+      <kbd>e</kbd><span>Export case report</span>
+      <kbd>?</kbd><span>This help</span>
+    </div>
+  </div>
+
+  <script src="/static/vendor/3d-force-graph.min.js"></script>
+  <script type="module" src="/static/js/ide.js"></script>
+</body>
+</html>

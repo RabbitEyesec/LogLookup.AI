@@ -1,0 +1,75 @@
+# LogLookup AI — example configuration (Master Specification section 7.1).
+# Copy to config.yaml and adjust. API keys come from environment variables
+# (${...}) and are NEVER written into this file.
+
+siem:
+  type: elastic
+  host: https://localhost:9200
+  api_key: ${LOGLOOKUP_SIEM_KEY}   # env var, never in file
+  alert_index: .alerts-security
+  poll_seconds: 60
+  severity_floor: medium           # low|medium|high
+  verify_tls: true                 # false is lab-only and unsafe
+  ca_cert_path: ""                 # private/self-signed CA PEM path
+
+engine:
+  mode: local                      # local | server
+  server_url: null                 # set if mode: server
+
+correlation:
+  window_minutes: 60
+  evaluate_every_minutes: 5
+  entity_precedence: [process_guid, upn, mac, ip]
+  # Out-of-order tolerance: events are correlated only once the watermark
+  # (max seen event time minus grace) has passed them.
+  watermark_grace_seconds: 60
+  # Stale in-memory entity state is flushed after this long without activity.
+  entity_retention_minutes: 1440
+  # Risk-Based Alerting (RBA): per-alert risk contribution by OCSF severity_id
+  # (1=Informational .. 6=Fatal); an attack chain is surfaced when the
+  # cumulative risk of any resolved entity in it crosses surface_threshold.
+  risk:
+    severity_weights:
+      0: 0      # Unknown
+      1: 1      # Informational
+      2: 2      # Low
+      3: 4      # Medium
+      4: 8      # High
+      5: 16     # Critical
+      6: 32     # Fatal
+    surface_threshold: 10
+    # A reversed / logically conflicting ATT&CK tactic sequence is downgraded
+    # (likely misconfiguration, not an intrusion).
+    misconfiguration_downgrade: 0.5
+
+# Deterministic pre-filter: known-benign suppression BEFORE anything reaches
+# the AI layer (later phase). Everything here is an explicit allowlist.
+prefilter:
+  trusted_ips: []                  # exact IPs or CIDRs, e.g. 10.0.0.0/8
+  expected_service_accounts: []    # actor user names, e.g. svc-backup
+  approved_scanner_hosts: []       # device hostnames, e.g. vuln-scanner-01
+
+ai:
+  provider: local                  # local | anthropic | openai
+  local_model: foundation-sec-8b
+  local_base_url: http://localhost:11434   # Ollama serving endpoint
+  cloud_model: null                # default: anthropic=claude-opus-4-8, openai=gpt-5
+  cloud_api_key: ${LOGLOOKUP_AI_KEY}
+  zero_data_retention: true        # cloud calls are BLOCKED unless acknowledged
+  redaction: true                  # tokenize sensitive values before cloud calls
+  triage_scope: surfaced           # surfaced | all — which chains the AI triages
+  timeout_seconds: 120
+  max_retries: 2                   # instructor validation-retry attempts
+  max_evidence_chars: 24000        # bound on the evidence payload sent to the AI
+  # RAG-grounded MITRE ATT&CK mapping. The knowledge base is built from the
+  # official MITRE ATT&CK STIX bundle: python -m engine.ai.kb --build
+  rag:
+    kb_path: var/attack_kb.json
+    index_dir: var/attack_index
+    backend: auto                  # vector (FAISS+embeddings) | lexical | auto
+    top_k: 8
+    embedding_model: sentence-transformers/all-mpnet-base-v2
+
+output:
+  results_index: loglookup-results
+  dashboard_base_url: http://localhost:8080

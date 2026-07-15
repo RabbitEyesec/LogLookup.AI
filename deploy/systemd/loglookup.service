@@ -1,0 +1,36 @@
+# LogLookup AI engine  systemd user service.
+# Installed to ~/.config/systemd/user/loglookup.service by deploy/install.sh.
+#
+#   systemctl --user status loglookup     health at a glance
+#   journalctl --user -u loglookup -f     live logs
+#
+# Type=notify + WatchdogSec: the engine signals READY when the API is up
+# and heartbeats; systemd restarts it if the event loop ever wedges.
+
+[Unit]
+Description=LogLookup AI — SIEM alert triage & correlation engine
+Documentation=https://localhost:8080/api/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=%h/.local/share/loglookup/venv/bin/loglookup serve
+Environment=LOGLOOKUP_HOME=%h/.config/loglookup
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=90
+TimeoutStopSec=30
+WatchdogSec=120
+# Graceful shutdown: uvicorn drains connections on SIGTERM (the default
+# KillSignal), then the engine closes the SIEM connector cleanly.
+
+# Hardening (user-service scope)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=%h/.config/loglookup %h/.local/share/loglookup
+
+[Install]
+WantedBy=default.target

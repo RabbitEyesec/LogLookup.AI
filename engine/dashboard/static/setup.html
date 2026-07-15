@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LogLookup AI | Setup</title>
+  <link rel="stylesheet" href="/static/theme.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' fill='%23000'/%3E%3Cpath d='M 8 32 L 20 20 L 20 8 L 32 20' fill='none' stroke='%2300E676' stroke-width='3'/%3E%3C/svg%3E" />
+  <style>
+    /* wizard only layout; visual language comes from theme.css */
+    .wizard {
+      max-width: 720px;
+      margin: 40px auto;
+      padding: 0 18px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--gap);
+    }
+    .wizard-brand {
+      text-align: center;
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      margin: 18px 0 2px;
+    }
+    .wizard-brand .mark { color: var(--green); }
+    .wizard-tag { text-align: center; color: var(--text-muted); font-size: 13px; }
+    .steps {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin: 10px 0 4px;
+    }
+    .steps .step {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--glass-border);
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .steps .step.now { color: var(--green); border-color: var(--edge); background: var(--green-dim); }
+    .steps .step.done { color: var(--text-secondary); }
+    .screen { display: none; flex-direction: column; gap: 12px; padding: 20px 22px; }
+    .screen.show { display: flex; }
+    .screen h1 { margin: 0; font-size: 18px; }
+    .screen p.lead { margin: 0; color: var(--text-secondary); }
+    .wizard-nav { display: flex; gap: 8px; justify-content: space-between; margin-top: 6px; }
+    .wizard-nav .right { display: flex; gap: 8px; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+    .mode-card {
+      padding: 14px 16px;
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      background: var(--s2);
+    }
+    .mode-card.selected { border-color: var(--green); background: var(--green-dim); }
+    .mode-card h3 { margin: 0 0 4px; font-size: 14px; }
+    .mode-card p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+    .model-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      font-size: 12.5px;
+    }
+    .model-row:last-child { border-bottom: none; }
+    .model-row .grow { flex: 1; }
+    .model-row .why { color: var(--text-muted); font-size: 11.5px; }
+    .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.07); overflow: hidden; flex: 1; }
+    .bar i { display: block; height: 100%; width: 0; background: var(--green-strong); transition: width 300ms ease; }
+    .summary-kv { display: grid; grid-template-columns: 190px 1fr; gap: 6px 14px; font-size: 13px; }
+    .summary-kv dt { color: var(--text-muted); }
+    .summary-kv dd { margin: 0; }
+    .welcome-points { margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; }
+    .welcome-points li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <div class="wizard">
+    <div class="wizard-brand" style="display:flex;align-items:center;justify-content:center;gap:12px">
+      <svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="8" cy="8" r="1.5" fill="#333"/><circle cx="20" cy="8" r="1.5" fill="#333"/><circle cx="32" cy="8" r="1.5" fill="#333"/>
+        <circle cx="8" cy="20" r="1.5" fill="#333"/><circle cx="20" cy="20" r="1.5" fill="#333"/><circle cx="32" cy="20" r="1.5" fill="#333"/>
+        <circle cx="8" cy="32" r="1.5" fill="#333"/><circle cx="20" cy="32" r="1.5" fill="#333"/><circle cx="32" cy="32" r="1.5" fill="#333"/>
+        <path d="M 8 32 L 20 20 L 20 8 L 32 20" fill="none" stroke="#00E676" stroke-width="1.5"/>
+        <rect x="6.5" y="30.5" width="3" height="3" fill="#00E676"/><rect x="18.5" y="18.5" width="3" height="3" fill="#00E676"/>
+        <rect x="18.5" y="6.5" width="3" height="3" fill="#00E676"/><rect x="30.5" y="18.5" width="3" height="3" fill="#00E676"/>
+      </svg>
+      <span style="letter-spacing:1px">LOGLOOKUP<span class="mark">.AI</span></span>
+    </div>
+    <div class="wizard-tag">AI triage &amp; correlation for your SIEM</div>
+
+    <div class="steps" id="steps">
+      <span class="step" data-step="0">1 · Welcome</span>
+      <span class="step" data-step="1">2 · Connect SIEM</span>
+      <span class="step" data-step="2">3 · Configure AI</span>
+      <span class="step" data-step="3">4 · Review</span>
+    </div>
+
+    <!-- 1 · Welcome -->
+    <section class="screen glass" data-screen="0">
+      <h1>Welcome</h1>
+      <p class="lead">LogLookup connects to your existing SIEM and groups
+        related alerts into attack chains. It can review each chain, cite the
+        evidence behind its verdict, and write the result back to the SIEM.</p>
+      <ul class="welcome-points">
+        <li><b>Correlation before model analysis.</b> Alert relationships come from the correlation engine, not the model.</li>
+        <li><b>Keep data local.</b> When you use a local model, evidence stays on this machine.</li>
+        <li><b>Set up in the browser.</b> Credentials are stored in the encrypted local store.</li>
+      </ul>
+      <p class="lead">Setup takes about two minutes.</p>
+      <div class="wizard-nav">
+        <span></span>
+        <div class="right">
+          <button class="primary" id="btn-start">Get started</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 · Connect SIEM -->
+    <section class="screen glass" data-screen="1">
+      <h1>Connect your SIEM</h1>
+      <p class="lead">Enter your Elasticsearch URL and API key. After the
+        connection test, choose the index that contains your alerts.</p>
+      <label class="field">Elasticsearch URL
+        <input id="siem-host" class="mono" placeholder="https://localhost:9200" />
+      </label>
+      <label class="field">API key
+        <input id="siem-key" class="mono" type="password" autocomplete="off"
+               placeholder="Elastic API key (stored encrypted, never shown again)" />
+      </label>
+      <label class="field">TLS certificate verification
+        <select id="siem-tls">
+          <option value="system">System trust store</option>
+          <option value="custom">Custom CA certificate</option>
+          <option value="insecure">Skip verification (lab only)</option>
+        </select>
+      </label>
+      <div id="siem-ca-fields" hidden>
+        <label class="field">CA certificate file
+          <input id="siem-ca-file" type="file" accept=".pem,.crt,.cer" />
+        </label>
+        <label class="field">Or custom CA path
+          <input id="siem-ca-path" class="mono" placeholder="/etc/loglookup/elastic-ca.pem" />
+        </label>
+      </div>
+      <div class="notice error" id="siem-tls-warning" hidden>
+        Lab only: certificate verification is disabled. Traffic and credentials
+        could be intercepted. Never use this option in production.
+      </div>
+      <div class="drawer-row" style="display:flex;gap:8px;align-items:center">
+        <button id="btn-siem-test">Test connection</button>
+        <span class="pill" id="siem-test-pill" hidden><span class="dot"></span><span id="siem-test-text"></span></span>
+      </div>
+      <div class="notice" id="siem-test-result" hidden></div>
+      <label class="field" id="siem-index-field" hidden>Alert index
+        <select id="siem-index"></select>
+      </label>
+      <div class="grid2">
+        <label class="field">Poll interval (seconds)
+          <input id="siem-poll" type="number" min="10" value="60" />
+        </label>
+        <label class="field">Minimum severity
+          <select id="siem-floor">
+            <option value="low">low and above</option>
+            <option value="medium" selected>medium and above</option>
+            <option value="high">high and above</option>
+          </select>
+        </label>
+      </div>
+      <div class="wizard-nav">
+        <button data-back>Back</button>
+        <div class="right">
+          <button id="btn-siem-skip" title="You can connect the SIEM later from Settings">Skip for now</button>
+          <button class="primary" id="btn-siem-next" disabled>Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 · Configure AI -->
+    <section class="screen glass" data-screen="2">
+      <h1>Configure AI</h1>
+      <p class="lead">Choose a local or cloud model. You can change the provider
+        later in Settings without restarting the service.</p>
+      <div class="grid2">
+        <div class="mode-card selected" id="mode-local" role="button" tabindex="0">
+          <h3>Local LLM <span class="chip tech">private</span></h3>
+          <p>Runs through Ollama on this machine. Evidence stays local.</p>
+        </div>
+        <div class="mode-card" id="mode-cloud" role="button" tabindex="0">
+          <h3>Cloud provider</h3>
+          <p>Use Anthropic or OpenAI with your API key. Optional redaction
+             replaces sensitive values before evidence is sent.</p>
+        </div>
+      </div>
+
+      <div id="pane-local">
+        <div class="notice" id="ollama-status">Detecting Ollama…</div>
+        <label class="field" id="local-model-field" hidden>Installed model to use
+          <select id="local-model"></select>
+        </label>
+        <div class="data" id="recommended-box" hidden>
+          <div class="model-row" style="color:var(--text-muted)">
+            <span class="grow">Recommended models (downloaded through Ollama)</span>
+          </div>
+          <div id="recommended-rows"></div>
+        </div>
+        <div class="model-row" id="pull-progress" hidden>
+          <span class="mono" id="pull-name"></span>
+          <div class="bar"><i id="pull-bar"></i></div>
+          <span class="mono" id="pull-pct"></span>
+        </div>
+      </div>
+
+      <div id="pane-cloud" hidden>
+        <div class="grid2">
+          <label class="field">Provider
+            <select id="cloud-provider">
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+            </select>
+          </label>
+          <label class="field">Model
+            <input id="cloud-model" class="mono" placeholder="provider default" />
+          </label>
+        </div>
+        <label class="field">API key
+          <input id="cloud-key" class="mono" type="password" autocomplete="off"
+                 placeholder="stored encrypted, never shown again" />
+        </label>
+        <label class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="cloud-redaction" checked style="margin:0" />
+          Tokenize sensitive values (IPs, users, hosts) before any cloud call
+        </label>
+        <label class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="cloud-zdr" checked style="margin:0" />
+          My provider account has Zero Data Retention (required for cloud calls)
+        </label>
+      </div>
+
+      <div class="drawer-row" style="display:flex;gap:8px;align-items:center">
+        <button id="btn-ai-validate">Validate provider</button>
+        <span class="pill" id="ai-validate-pill" hidden><span class="dot"></span><span id="ai-validate-text"></span></span>
+      </div>
+      <div class="notice" id="ai-validate-result" hidden></div>
+
+      <div class="wizard-nav">
+        <button data-back>Back</button>
+        <div class="right">
+          <button class="primary" id="btn-ai-next">Next</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4 · Review -->
+    <section class="screen glass" data-screen="3">
+      <h1>Review &amp; launch</h1>
+      <p class="lead">Check the connection status and settings before launch.
+        Credentials will be stored in the encrypted local store.</p>
+      <div class="pills" id="health-pills"></div>
+      <dl class="summary-kv" id="summary"></dl>
+      <div class="notice" id="launch-result" hidden></div>
+      <div class="wizard-nav">
+        <button data-back>Back</button>
+        <div class="right">
+          <button class="primary" id="btn-launch">Launch LogLookup AI</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      Model-generated verdicts are based on correlated evidence. Review them
+      before taking action.
+    </footer>
+  </div>
+
+  <script type="module" src="/static/js/setup.js"></script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+# Python bytecode, packaging, and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+build/
+dist/
+
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local configuration and secrets
+config.yaml
+state.json
+.env
+.env.*
+!.env.example
+secrets.key
+secrets.enc
+.loglookup-openai.key
+elastic-ca.pem
+*.pem.local
+
+# Runtime data and logs
+var/
+logs/
+tmp/
+temp/
+*.log
+*.pid
+*.sock
+*.tmp
+
+# Benchmarks, test reports, and temporary screenshots
+.benchmarks/
+benchmark-results/
+benchmark_results/
+benchmark-*.json
+benchmark-*.csv
+playwright-report/
+test-results/
+screenshots/
+screenshot-*.png
+*-screenshot.png
+tmp-screenshot*
+
+# Local Elasticsearch and Kibana storage
+.elasticsearch/
+.kibana/
+elasticsearch-data/
+kibana-data/
+data/elasticsearch/
+data/kibana/
+
+# Operating-system and editor-local files
+.DS_Store
+__MACOSX/
+.idea/
+.vscode/*.local.json
+.claude/settings.local.json
+*.swp
+*.swo
+*~
+
+# Temporary archives and patch leftovers
+tmp-*.zip
+tmp-*.tar
+tmp-*.tar.gz
+*.tmp.zip
+*.tmp.tar
+*.tmp.tar.gz
+*.orig
+*.rej
+*.bak

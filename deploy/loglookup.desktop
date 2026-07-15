@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LogLookup AI
+GenericName=SIEM Alert Triage
+Comment=AI triage & correlation for your SIEM  attack chains, cited evidence, Elastic write-back
+Exec=loglookup open
+Icon=loglookup
+Terminal=false
+Categories=Security;Network;Monitor;
+Keywords=SIEM;SOC;security;alerts;triage;MITRE;correlation;
+StartupNotify=false

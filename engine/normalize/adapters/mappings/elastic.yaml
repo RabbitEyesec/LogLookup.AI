@@ -1,0 +1,98 @@
+# Elastic / ECS alert document -> OCSF DetectionFinding mapping.
+# Declarative field-to-field rules; hard cases use the named Python hooks.
+source: elastic
+
+timestamp:
+  # Prefer the original event time over the alert's write time.
+  fields:
+    - kibana.alert.original_time
+    - "@timestamp"
+    - event.created
+  default_offset_minutes: 0
+
+severity:
+  fields:
+    - kibana.alert.severity
+    - signal.rule.severity
+    - event.severity
+
+fields:
+  - target: finding_info.title
+    sources: [kibana.alert.rule.name, signal.rule.name, rule.name]
+    default: Unknown finding
+  - target: finding_info.uid
+    sources: [kibana.alert.uuid, signal.rule.rule_id, event.id]
+  - target: finding_info.desc
+    sources: [kibana.alert.rule.description, signal.rule.description]
+  - target: finding_info.analytic.name
+    sources: [kibana.alert.rule.name, signal.rule.name]
+  - target: finding_info.analytic.uid
+    sources: [kibana.alert.rule.uuid, signal.rule.id]
+  - target: message
+    sources: [kibana.alert.reason, message]
+  - target: device.hostname
+    sources: [host.name, host.hostname]
+  - target: device.ip
+    sources: [host.ip]
+    transform: first          # ECS host.ip is an array
+  - target: device.mac
+    sources: [host.mac]
+    transform: first
+  - target: device.uid
+    sources: [agent.id, host.id]
+  - target: device.domain
+    sources: [host.domain]
+  - target: device.os.name
+    sources: [host.os.name]
+  - target: actor.user.name
+    sources: [user.name]
+  - target: actor.user.uid
+    sources: [user.id]
+  - target: actor.user.domain
+    sources: [user.domain]
+  - target: actor.user.email_addr
+    sources: [user.email]
+  - target: actor.process.uid
+    sources: [process.entity_id]
+  - target: actor.process.pid
+    sources: [process.pid]
+    transform: int
+  - target: actor.process.name
+    sources: [process.name]
+  - target: actor.process.cmd_line
+    sources: [process.command_line]
+  - target: src_endpoint.ip
+    sources: [source.ip]
+  - target: src_endpoint.port
+    sources: [source.port]
+    transform: int
+  - target: src_endpoint.hostname
+    sources: [source.domain]
+  - target: dst_endpoint.ip
+    sources: [destination.ip]
+  - target: dst_endpoint.port
+    sources: [destination.port]
+    transform: int
+  - target: metadata.product.vendor_name
+    sources: [event.provider, agent.type]
+    default: Elastic
+  - target: metadata.product.name
+    sources: [event.module]
+  - target: metadata.event_code
+    sources: [event.code]
+  - target: metadata.log_name
+    sources: [event.dataset]
+
+attacks:
+  tactic_name:
+    - kibana.alert.rule.threat.tactic.name
+    - threat.tactic.name
+  tactic_uid:
+    - kibana.alert.rule.threat.tactic.id
+    - threat.tactic.id
+  technique_uid:
+    - kibana.alert.rule.threat.technique.id
+    - threat.technique.id
+  technique_name:
+    - kibana.alert.rule.threat.technique.name
+    - threat.technique.name
