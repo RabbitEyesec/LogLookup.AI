@@ -110,7 +110,7 @@ Cloud AI calls are blocked unless zero-data-retention acknowledgement is enabled
 
 ## Documentation
 
-For the complete practical implementation—from lab deployment and Elastic
+For the complete practical implementation from lab deployment and Elastic
 configuration through endpoint telemetry, detection validation, and the final
 end-to-end investigation—read the [Project Execution Report](docs/LogLookup-AI-Project-Execution-Report.docx).
 
