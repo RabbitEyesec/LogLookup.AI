@@ -1,7 +1,10 @@
 [project]
 name = "loglookup-ai"
-version = "0.3.0"
-description = "LogLookup AI SIEM alert normalization, deterministic correlation, RAG grounded AI triage, Elastic write-back, and attack chain dashboard."
+version = "2.0.0"
+description = "LogLookup AI multi-SIEM investigation platform: Elastic, Sentinel, Splunk, Defender XDR and Entra ID ingestion, deterministic cross-source correlation, RAG grounded AI triage, approval-gated SOAR dispatch, and attack chain dashboard."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+keywords = ["soc", "siem", "ocsf", "mitre-attack", "elastic", "sentinel", "splunk", "defender", "entra", "soar"]
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "msgspec>=0.19",
@@ -20,7 +23,14 @@ dependencies = [
     "faiss-cpu>=1.8",
     # Encrypted local secret store (already in the tree via py-ocsf-models)
     "cryptography>=42",
+    # v2: durable operational store + Microsoft Entra token acquisition
+    "aiosqlite>=0.20",
+    "azure-identity>=1.17",
 ]
+
+[project.urls]
+Homepage = "https://github.com/RabbitEyesec/LogLookup.AI"
+Documentation = "https://github.com/RabbitEyesec/LogLookup.AI/tree/main/docs"
 
 [project.scripts]
 loglookup = "engine.app:main"

@@ -307,3 +307,74 @@ class ElasticConnector:
                     await asyncio.sleep(self._siem.poll_seconds)
             except asyncio.TimeoutError:
                 pass
+
+
+class ElasticSourceConnector:
+    """Registry-facing wrapper: an Elastic cluster as a v2 source.
+
+    Reuses :class:`ElasticConnector` transport unchanged. Cursor semantics:
+    ``since_ms`` is the inclusive ``@timestamp`` resume point; the ledger
+    drops the overlap, so an inclusive restart is safe.
+    """
+
+    provider = "elastic"
+    streams = ("alerts",)
+
+    def __init__(self, conn, api_key: str, *, connector: "ElasticConnector | None" = None,
+                 clock=time.time) -> None:
+        from engine.connectors.base import ConfigurationError
+
+        o = conn.options
+        host = o.get("host")
+        if not isinstance(host, str) or not host.startswith(("https://", "http://")):
+            raise ConfigurationError("Elastic options.host must be an http(s) URL")
+        self._conn = conn
+        self._clock = clock
+        self._siem = SiemConfig(
+            type="elastic", host=host, api_key=api_key,
+            alert_index=str(o.get("alert_index", ".alerts-security")),
+            poll_seconds=conn.poll_seconds, verify_tls=conn.tls_verify,
+            ca_cert_path=conn.ca_bundle_path or "")
+        self._connector = connector or ElasticConnector(
+            self._siem, page_size=conn.max_page_size)
+        self._namespace = host
+
+    async def open(self) -> None:
+        await self._connector.info()
+
+    async def close(self) -> None:
+        await self._connector.aclose()
+
+    async def fetch_page(self, cursor, stream="alerts"):
+        from engine.connectors.base import PageResult
+
+        now_ms = int(self._clock() * 1000)
+        since = (int(cursor["since_ms"]) if cursor and "since_ms" in cursor
+                 else now_ms - self._conn.lookback_seconds * 1000)
+        limit = self._conn.max_page_size
+        hits: list[dict[str, Any]] = []
+        async for hit in self._connector.fetch_batch(since, now_ms + 1):
+            hits.append(hit)
+            if len(hits) >= limit:
+                break
+        if len(hits) >= limit:
+            last = int((hits[-1].get("sort") or [since])[0])
+            nxt = last if last > since else since + 1
+            return PageResult(hits, {"since_ms": nxt}, False, [])
+        return PageResult(hits, {"since_ms": max(
+            since, now_ms - self._conn.lookback_seconds * 1000)}, True, [])
+
+    def identify(self, record, stream):
+        from engine.connectors.base import RecordIdentity
+        from engine.envelope import KIND_ALERT
+
+        src = record.get("_source", record)
+        return RecordIdentity(
+            record_kind=KIND_ALERT,
+            source_event_id=str(record.get("_id") or src.get("kibana.alert.uuid") or ""),
+            namespace=self._namespace,
+            event_time=src.get("@timestamp"),
+            source_updated_at=src.get("kibana.alert.last_detected"),
+            provenance={"platform": "elasticsearch",
+                        "index": record.get("_index")},
+        )

@@ -64,6 +64,10 @@ class Cluster:
     risk_score: float = 0.0  # RBA (risk module)
     surfaced: bool = False  # RBA (risk module)
     merged_into: Optional[str] = None
+    #: transparent per-component risk contributions (risk module, v2)
+    risk_breakdown: dict[str, Any] = field(default_factory=dict)
+    #: provider names contributing independent alerts to this chain
+    source_providers: list[str] = field(default_factory=list)
 
     @property
     def alert_count(self) -> int:
@@ -214,7 +218,7 @@ class CorrelationEngine:
         )
         if not live_ids:
             cluster_id = self._id_generator.next_id(
-                first_time, self._primary_entity_name(members)
+                first_time, self._primary_entity_name(members), anchor=first_uid
             )
             cluster = Cluster(cluster_id=cluster_id)
             self._clusters[cluster_id] = cluster
@@ -317,6 +321,20 @@ class CorrelationEngine:
             key=lambda c: (c.first_time_ms, c.cluster_id),
         )
 
+    def merge_aliases(self) -> dict[str, str]:
+        """``{old cluster_id: surviving cluster_id}`` for merged chains."""
+        return {
+            c.cluster_id: c.merged_into
+            for c in self._clusters.values() if c.merged_into
+        }
+
+    def preload_ids(self, anchors, counters) -> None:
+        self._id_generator.preload(anchors, counters)
+
+    @property
+    def id_anchors(self) -> dict[str, str]:
+        return self._id_generator.anchors
+
     def alerts_of(self, cluster: Cluster) -> list[NormalizedAlert]:
         return [self._alerts[uid] for uid in cluster.alert_uids]
 
@@ -361,6 +379,7 @@ class CorrelationEngine:
                     "source_ip": alert.src_endpoint.ip if alert.src_endpoint else "",
                     "destination_ip": alert.dst_endpoint.ip if alert.dst_endpoint else "",
                     "evidence": _alert_evidence(alert),
+                    "source": alert.unmapped.get("source"),
                     "entities": sorted(
                         entity.display_name
                         for entity in self._resolutions[alert.uid].entities
@@ -403,4 +422,18 @@ class CorrelationEngine:
             "disposition": cluster.disposition,
             "risk_score": cluster.risk_score,
             "surfaced": cluster.surfaced,
+            "risk_breakdown": cluster.risk_breakdown,
+            "sources": self.cluster_sources(cluster),
         }
+
+    def cluster_sources(self, cluster: Cluster) -> list[dict[str, Any]]:
+        """Per-connection alert counts: the chain's source coverage."""
+        seen: dict[tuple[str, str], int] = {}
+        for alert in self.alerts_of(cluster):
+            src = alert.unmapped.get("source") or {}
+            key = (src.get("provider") or "legacy", src.get("connection_id") or "")
+            seen[key] = seen.get(key, 0) + 1
+        return [
+            {"provider": provider, "connection_id": conn, "alert_count": count}
+            for (provider, conn), count in sorted(seen.items())
+        ]

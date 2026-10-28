@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from engine.ai.provider import ProviderError
 from engine.ai.service import TriageService
 from engine.api import views
+from engine.api.router_v2 import install_error_handlers, router as router_v2
 from engine.api.setup import router as setup_router
 from engine.config import Config
 from engine.connectors.elastic import ConnectorError, ElasticConnector
@@ -73,7 +74,7 @@ def create_app(
     :class:`engine.settings.ManagedSettings` instance in managed mode
     (None for the dev CLI — nothing persists then).
     """
-    app = FastAPI(title="LogLookup AI", version="1.0", docs_url="/api/docs",
+    app = FastAPI(title="LogLookup AI", version="2.0.0", docs_url="/api/docs",
                   openapi_url="/api/openapi.json", lifespan=lifespan)
     app.state.config = config
     app.state.service = service
@@ -82,6 +83,9 @@ def create_app(
     app.state.settings = settings
 
     app.include_router(setup_router)
+    app.state.v2 = None  # set by the runner when the v2 runtime is attached
+    install_error_handlers(app)
+    app.include_router(router_v2)
 
     # -- helpers ---------------------------------------------------------------
 

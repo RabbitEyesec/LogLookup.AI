@@ -151,13 +151,21 @@ def test_elastic_adapter_maps_kibana_alert():
     assert alert.metadata.product.vendor_name == "Elastic"
 
 
-def test_stub_adapters_raise_clearly():
-    rec = record(BASE_EVENT)
-    for name in ("splunk", "sentinel"):
-        with pytest.raises(AdapterNotImplemented):
-            get_adapter(name).parse(rec)
+def test_vendor_adapters_are_registered_and_not_stubs():
+    for name in ("splunk", "sentinel", "defender_xdr"):
+        alert = get_adapter(name).parse(record({"title": "x", "severity": "high"}))
+        assert alert.class_uid == 2004
 
 
 def test_unknown_source_type_rejected():
     with pytest.raises(KeyError):
         get_adapter("qradar")
+
+
+def test_vendor_tactic_labels_are_canonicalised():
+    from engine.normalize.tactics import normalize_tactic, normalize_tactics
+    assert normalize_tactic("CredentialAccess") == "Credential Access"
+    assert normalize_tactic("CommandAndControl") == "Command and Control"
+    assert normalize_tactic("defense_evasion") == "Defense Evasion"
+    assert normalize_tactic("PreAttack") == "PreAttack"          # unknown passes through
+    assert normalize_tactics(["Execution", "", "InitialAccess"]) == ["Execution", "Initial Access"]

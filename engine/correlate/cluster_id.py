@@ -34,14 +34,43 @@ def date_of(epoch_ms: int) -> str:
 
 
 class ClusterIdGenerator:
-    """Deterministic per-(date, entity) sequence numbers."""
+    """Deterministic per-(date, entity) sequence numbers.
+
+    v2 durability: ``preload`` seeds the generator from the investigation
+    store. A chain is identified by its *anchor* (its earliest alert uid);
+    when the same anchor forms a chain again after a restart or an
+    overlapping re-read, the previously issued id is returned instead of a
+    new sequence number, and new ids continue after the highest persisted
+    sequence so an old id is never reissued to a different chain.
+    """
 
     def __init__(self) -> None:
         self._counters: dict[tuple[str, str], int] = {}
+        self._by_anchor: dict[str, str] = {}
 
-    def next_id(self, first_time_ms: int, entity_name: str) -> str:
+    def preload(
+        self,
+        anchors: dict[str, str],
+        counters: dict[tuple[str, str], int],
+    ) -> None:
+        self._by_anchor.update(anchors)
+        for key, value in counters.items():
+            self._counters[key] = max(self._counters.get(key, 0), value)
+
+    @property
+    def anchors(self) -> dict[str, str]:
+        return dict(self._by_anchor)
+
+    def next_id(
+        self, first_time_ms: int, entity_name: str, anchor: str | None = None
+    ) -> str:
+        if anchor is not None and anchor in self._by_anchor:
+            return self._by_anchor[anchor]
         date = date_of(first_time_ms)
         label = sanitize_label(entity_name)
         key = (date, label)
         self._counters[key] = self._counters.get(key, 0) + 1
-        return f"{_PREFIX}-{date}-{label}-{self._counters[key]:03d}"
+        cluster_id = f"{_PREFIX}-{date}-{label}-{self._counters[key]:03d}"
+        if anchor is not None:
+            self._by_anchor[anchor] = cluster_id
+        return cluster_id

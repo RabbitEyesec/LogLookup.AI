@@ -2,7 +2,32 @@
 
 ## 1. Overview
 
-LogLookup AI is a staged investigation pipeline that runs alongside Elastic Security. Each stage consumes structured output from the previous stage. Deterministic stages form and score an attack chain before the optional AI stage evaluates it.
+LogLookup AI is a staged investigation pipeline that runs alongside your SIEM and identity stack. Elastic Security, Microsoft Sentinel, Splunk Enterprise Security, Microsoft Defender XDR and Microsoft Entra ID feed one durable, read-only ingestion layer. Each stage consumes structured output from the previous stage. Deterministic stages form and score an attack chain before the optional AI stage evaluates it, and approved response work leaves through Azure Logic Apps.
+
+```mermaid
+flowchart TD
+    subgraph Sources[Read-only source connections]
+        E[Elastic Security]
+        S[Microsoft Sentinel / KQL]
+        P[Splunk ES / SPL]
+        D[Microsoft Defender XDR]
+        I[Microsoft Entra ID]
+    end
+    REG[Connection registry + credential broker] --> COL[Independent async workers]
+    E & S & P & D & I --> COL
+    COL --> ING[Durable ledger + per-source cursors]
+    ING --> MAP[Adapters: OCSF findings + context observations]
+    MAP --> ENT[Scoped entity resolution]
+    ENT --> COR[Event-time correlation + risk breakdown]
+    COR --> STORE[(Investigations / Elastic write-back)]
+    COR --> LLM[Optional AI via LiteLLM]
+    LLM --> STORE
+    STORE --> API[FastAPI + workspace]
+    API --> APP[Approval ledger + outbox]
+    APP --> SOAR[Azure Logic Apps]
+```
+
+The original single-source flow, which v2 keeps intact:
 
 ```text
 Elastic Security
@@ -33,6 +58,44 @@ The implementation depends on four stable contracts:
 - Elasticsearch is the durable result store; dashboard deep links use `/incident/<cluster_id>`.
 
 Changing one of these contracts affects stored results, tests, API consumers, or deep links and should be treated as an architectural change.
+
+## 2a. v2 Runtime Layers
+
+| Layer | Modules | Responsibility |
+|---|---|---|
+| Connectors | `engine/connectors/{elastic,sentinel,splunk,defender_xdr,entra_id}.py`, `http.py`, `auth/`, `registry.py`, `supervisor.py` | One supervised async worker per connection; shared retry, TLS and host-allowlisted HTTP; per-audience Microsoft tokens |
+| Durable store | `engine/store/` | SQLite WAL ledger, cursors, aliases, investigations, outbox, audit; encrypted raw-evidence vault |
+| Adapters | `engine/normalize/adapters/` | Vendor records -> OCSF Detection Finding, or `ContextObservation` for sign-ins and directory changes |
+| Correlation | `engine/correlate/` | Anchored, durable chain ids; per-source provenance; explainable risk components |
+| Enrichment | `engine/enrich/identity.py` | Strict, scope-bound identity join of Entra context onto a chain |
+| AI | `engine/ai/` | Source-aware bounded evidence with citable refs, per-source budget, grounding of cited refs |
+| Response | `engine/response/`, `engine/connectors/outputs/logic_apps.py` | Allowlisted workflows, approvals, outbox, dispatch, reconciliation, hash-chained audit |
+| API / UI | `engine/api/router_v2.py`, `engine/dashboard/static/js/*-v2.js` | Connections, multi-source investigations, evidence inspector, response drawer |
+| Runtime | `engine/runtime.py` | Owns the store, supervisor, evaluation loop and dispatcher |
+
+### Processing guarantees
+
+- **Acquisition** is at-least-once with intentional overlap; the ledger makes the effect exactly-once-per-revision.
+- **Canonical identity** is deterministic and bound to scope and connection.
+- **Page + cursor** commit in one transaction; a cursor never runs ahead of durable data.
+- **Ordering**: event time drives the timeline; ingestion time drives discovery and checkpoints.
+- **Independence**: an unavailable source pauses only itself.
+- **Response actions** are approved, uniquely keyed and deduplicated; an ambiguous send enters `reconciliation_required` and is never resent automatically.
+
+### Correlation and risk
+
+Edges carry their rule and evidence; weak identifiers (hostname, IP) are time-bounded pivots and never durable identity. Risk keeps the existing severity weights as its baseline and reports four components per chain revision:
+
+```text
+risk = severity_evidence
+     + independent_source_confirmation      (+4.0 per additional independent source)
+     + supported_attack_progression
+     - documented_benign_or_conflicting_context
+```
+
+Several representations of one alert contribute once; context observations never inflate finding counts; risk and state are available without an AI provider. Microsoft's CamelCase tactic labels are canonicalised (`CredentialAccess` -> `Credential Access`) so a Sentinel Execution followed by a Defender Credential Access is recognised as one progressing chain.
+
+See `docs/v2/` for the source contracts, provider configuration, security model, Logic Apps contract and migration.
 
 ## 3. Processing Components
 
@@ -126,7 +189,8 @@ The browser interface is served from `engine/dashboard/static/`. It renders stor
 Managed mode stores:
 
 - non-secret settings in `config.yaml`;
-- a polling cursor in `state.json`;
+- a polling cursor in `state.json` (the original Elastic path) and per-source cursors in the v2 store;
+- the v2 operational store `var/loglookup-v2.sqlite3` (ledger, investigations, outbox, audit);
 - the generated secret-store key and encrypted credential blob in owner-only files;
 - an uploaded Elastic CA certificate when configured; and
 - ATT&CK knowledge-base and retrieval data under the application home.

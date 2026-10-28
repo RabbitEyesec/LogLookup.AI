@@ -18,6 +18,8 @@ from typing import Any
 
 import yaml
 
+from engine.connectors.base import SourceConnection
+
 _ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 #: severity_floor labels -> minimum OCSF severity_id (1=Info .. 6=Fatal)
@@ -77,6 +79,8 @@ class RiskConfig:
     )
     surface_threshold: float = 10.0
     misconfiguration_downgrade: float = 0.5
+    #: risk added per additional independent source provider in one chain
+    independent_source_weight: float = 4.0
 
     def weight_for(self, severity_id: int) -> float:
         return float(self.severity_weights.get(severity_id, 0))
@@ -169,6 +173,60 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class StorageConfig:
+    """Durable operational store (SQLite WAL, single writer)."""
+
+    driver: str = "sqlite"
+    db_path: str = "var/loglookup-v2.sqlite3"
+    wal: bool = True
+    evidence_encryption: bool = True
+    raw_retention_days: int = 30
+
+    def __post_init__(self) -> None:
+        if self.driver != "sqlite":
+            raise ConfigError("storage.driver must be 'sqlite' in v2")
+        if not self.evidence_encryption:
+            raise ConfigError(
+                "storage.evidence_encryption cannot be disabled: raw vendor "
+                "evidence is always encrypted at rest")
+        if self.raw_retention_days < 1:
+            raise ConfigError("storage.raw_retention_days must be >= 1")
+
+
+@dataclass(frozen=True)
+class LogicAppsConfig:
+    """Azure Logic Apps SOAR channel. Off unless explicitly enabled."""
+
+    enabled: bool = False
+    auth_profile_id: str = ""
+    allowed_workflows: tuple[str, ...] = ()
+    require_explicit_approval: bool = True
+    unknown_delivery_policy: str = "reconcile"
+    timeout_seconds: int = 30
+
+    def __post_init__(self) -> None:
+        if not self.require_explicit_approval:
+            raise ConfigError(
+                "outputs.logic_apps.require_explicit_approval cannot be "
+                "disabled: no response action runs without approval")
+        if self.unknown_delivery_policy != "reconcile":
+            raise ConfigError(
+                "outputs.logic_apps.unknown_delivery_policy must be "
+                "'reconcile': ambiguous deliveries are never auto-retried")
+
+
+@dataclass(frozen=True)
+class AccessConfig:
+    """API access boundary beyond the loopback-only default."""
+
+    #: peers allowed to assert identity via X-Forwarded-User (reverse proxy)
+    trusted_proxy_ips: tuple[str, ...] = ()
+    #: header carrying the proxy-authenticated user (trusted proxies only)
+    proxy_user_header: str = "X-Forwarded-User"
+    proxy_role_header: str = "X-Forwarded-Role"
+
+
+@dataclass(frozen=True)
 class Config:
     siem: SiemConfig = field(default_factory=SiemConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
@@ -176,6 +234,34 @@ class Config:
     prefilter: PrefilterConfig = field(default_factory=PrefilterConfig)
     ai: AiConfig = field(default_factory=AiConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    scope_id: str = "org-local"
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    sources: tuple[SourceConnection, ...] = ()
+    logic_apps: LogicAppsConfig = field(default_factory=LogicAppsConfig)
+    access: AccessConfig = field(default_factory=AccessConfig)
+
+    def effective_sources(self, include_legacy: bool = True) -> tuple[SourceConnection, ...]:
+        """Configured sources plus the legacy single-Elastic ``siem`` block.
+
+        The legacy block surfaces as connection ``elastic-default`` (origin
+        ``legacy``): still polled by the original single-source path, but
+        visible and manageable alongside the v2 connections.
+        """
+        if include_legacy and self.siem.host and not any(
+            c.connection_id == "elastic-default" for c in self.sources
+        ):
+            legacy = SourceConnection(
+                connection_id="elastic-default", provider="elastic",
+                scope_id=self.scope_id, name="Elastic Security (default)",
+                active=True, poll_seconds=self.siem.poll_seconds,
+                tls_verify=self.siem.verify_tls,
+                ca_bundle_path=self.siem.ca_cert_path or None,
+                origin="legacy",
+                options={"host": self.siem.host,
+                         "alert_index": self.siem.alert_index},
+            )
+            return (legacy, *self.sources)
+        return self.sources
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -236,6 +322,25 @@ def config_from_dict(data: dict[str, Any]) -> Config:
     # Validate severity floor eagerly so a bad value fails at load time.
     siem.severity_floor_id  # noqa: B018 - intentional validation access
 
+    app_raw = data.get("app") if isinstance(data.get("app"), dict) else {}
+    scope_id = str(app_raw.get("scope_id") or "org-local")
+    try:
+        storage = StorageConfig(**_section(data, "storage"))
+        access = AccessConfig(**{
+            **_section(data, "access"),
+            **({"trusted_proxy_ips": tuple(
+                _section(data, "access").get("trusted_proxy_ips") or ())}
+               if "trusted_proxy_ips" in _section(data, "access") else {}),
+        })
+        outputs_raw = _section(data, "outputs")
+        la_raw = dict(outputs_raw.get("logic_apps") or {})
+        if "allowed_workflows" in la_raw:
+            la_raw["allowed_workflows"] = tuple(la_raw["allowed_workflows"] or ())
+        logic_apps = LogicAppsConfig(**la_raw)
+    except TypeError as exc:
+        raise ConfigError(f"invalid storage/access/outputs configuration: {exc}") from None
+    sources = _parse_sources(data.get("sources"), scope_id)
+
     return Config(
         siem=siem,
         engine=engine,
@@ -243,4 +348,46 @@ def config_from_dict(data: dict[str, Any]) -> Config:
         prefilter=prefilter,
         ai=ai,
         output=output,
+        scope_id=scope_id,
+        storage=storage,
+        sources=sources,
+        logic_apps=logic_apps,
+        access=access,
     )
+
+
+def _parse_sources(raw: Any, default_scope: str) -> tuple[SourceConnection, ...]:
+    if raw in (None, []):
+        return ()
+    if not isinstance(raw, list):
+        raise ConfigError("config 'sources' must be a list")
+    out: list[SourceConnection] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ConfigError("each entry in 'sources' must be a mapping")
+        tls = item.get("tls") or {}
+        try:
+            conn = SourceConnection(
+                connection_id=str(item.get("id", "")),
+                provider=str(item.get("provider", "")),
+                scope_id=str(item.get("scope_id") or default_scope),
+                name=str(item.get("name", "")),
+                mode=str(item.get("mode", "poll")),
+                active=bool(item.get("enabled", item.get("active", False))),
+                poll_seconds=int(item.get("poll_seconds", 60)),
+                lookback_seconds=int(item.get("lookback_seconds", 300)),
+                max_page_size=int(item.get("max_page_size", 500)),
+                auth_profile_id=str(item.get("auth_profile_id", "")),
+                tls_verify=bool(tls.get("verify", True)),
+                ca_bundle_path=tls.get("ca_bundle_path"),
+                origin="config",
+                options=dict(item.get("options") or {}),
+            )
+        except (ValueError, TypeError) as exc:
+            raise ConfigError(f"invalid source {item.get('id')!r}: {exc}") from None
+        if conn.connection_id in seen:
+            raise ConfigError(f"duplicate source id {conn.connection_id!r}")
+        seen.add(conn.connection_id)
+        out.append(conn)
+    return tuple(out)

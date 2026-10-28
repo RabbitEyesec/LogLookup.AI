@@ -1,0 +1,65 @@
+# Microsoft Graph security alert (alerts_v2) -> OCSF DetectionFinding.
+# `_derived` is produced by DefenderXdrAdapter.event_of (parsed evidence[]).
+source: defender_xdr
+
+timestamp:
+  fields:
+    - firstActivityDateTime
+    - createdDateTime
+  default_offset_minutes: 0
+
+severity:
+  fields:
+    - severity
+
+fields:
+  - target: finding_info.title
+    sources: [title]
+    default: Unknown finding
+  - target: finding_info.uid
+    sources: [id]
+  - target: finding_info.desc
+    sources: [description]
+  - target: finding_info.analytic.name
+    sources: [title]
+  - target: finding_info.analytic.uid
+    sources: [detectorId]
+  - target: message
+    sources: [description, title]
+  - target: device.hostname
+    sources: [_derived.device_name]
+  - target: device.uid
+    sources: [_derived.device_id]
+  - target: device.os.name
+    sources: [_derived.os]
+  - target: actor.user.name
+    sources: [_derived.user, _derived.upn]
+  - target: actor.user.uid
+    sources: [_derived.user_id]
+  - target: actor.user.domain
+    sources: [_derived.user_domain]
+  - target: actor.user.email_addr
+    sources: [_derived.upn]
+  - target: actor.process.pid
+    sources: [_derived.process_id]
+    transform: int
+  - target: actor.process.name
+    sources: [_derived.process_name]
+  - target: actor.process.cmd_line
+    sources: [_derived.cmd_line]
+  - target: src_endpoint.ip
+    sources: [_derived.ip]
+  - target: metadata.product.vendor_name
+    sources: [providerVendor]
+    default: Microsoft
+  - target: metadata.product.name
+    sources: [serviceSource]
+    default: Microsoft Defender XDR
+  - target: metadata.log_name
+    sources: [category]
+
+attacks:
+  tactic_name:
+    - _derived.tactics
+  technique_uid:
+    - _derived.techniques

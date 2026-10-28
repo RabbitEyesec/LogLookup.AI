@@ -37,12 +37,60 @@ def technique_label(uid: str, kb: Optional[AttackKB]) -> str:
     return f"{uid} {record.name}{tactics}"
 
 
+def _source_sections(summary: dict[str, Any], context: dict[str, Any]) -> list[str]:
+    """v2 sections: sources, risk rationale, evidence appendix, identity
+    context and response history. Empty for legacy single-source chains."""
+    lines: list[str] = []
+    sources = [s for s in summary.get("sources", []) if s.get("provider") != "legacy"]
+    if sources:
+        lines += ["", "## Sources", "", "| Provider | Connection | Alerts |", "|---|---|---|"]
+        lines += [f"| {s['provider']} | {_md_escape(s['connection_id'])} | {s['alert_count']} |"
+                  for s in sources]
+    bd = summary.get("risk_breakdown") or {}
+    if bd.get("rule_version"):
+        lines += ["", f"## Risk rationale (rules v{bd['rule_version']})", ""]
+        for key, label in (
+            ("severity_evidence", "Severity evidence"),
+            ("independent_source_confirmation", "Independent source confirmation"),
+            ("supported_attack_progression", "Supported attack progression"),
+            ("documented_benign_or_conflicting_context",
+             "Benign / conflicting context"),
+        ):
+            lines.append(f"- {label}: {bd.get(key, 0)}")
+        lines.append(f"- **Total: {bd.get('total', summary['risk_score'])}**")
+    identity = context.get("identity") or {}
+    if identity.get("observations"):
+        lines += ["", "## Identity context (supporting, not detections)", ""]
+        for obs in identity["observations"][:20]:
+            lines.append(f"- {obs['event_time']} - {obs['type']} - "
+                         f"{_md_escape(str(obs['principal']))} (`{obs['source_ref']}`)")
+    refs = [(a["uid"], (a.get("source") or {}).get("evidence_ref"),
+             (a.get("source") or {}).get("raw_sha256")) for a in summary["alerts"]]
+    refs = [r for r in refs if r[1]]
+    if refs:
+        lines += ["", "## Evidence appendix", "",
+                  "| Alert | Evidence reference | Content SHA-256 |", "|---|---|---|"]
+        lines += [f"| `{uid}` | `{ref}` | `{(sha or '')[:16]}…` |" for uid, ref, sha in refs]
+    actions = context.get("actions") or []
+    if actions:
+        lines += ["", "## Response actions", "",
+                  "| Workflow | State | Requested by | Approved by |", "|---|---|---|---|"]
+        lines += [f"| {a['workflow_id']} | {a['state']} | {a['requested_by']} | "
+                  f"{', '.join(x['by'] for x in a['approvals']) or '-'} |"
+                  for a in actions]
+        lines.append("")
+        lines.append("_A workflow acknowledgement is not proof of a downstream "
+                     "effect._")
+    return lines
+
+
 def build_report(
     summary: dict[str, Any],
     triage: Optional[TriageResult],
     *,
     kb: Optional[AttackKB] = None,
     dashboard_url: str = "",
+    context: Optional[dict[str, Any]] = None,
 ) -> str:
     """Markdown case report for one attack chain.
 
@@ -99,6 +147,8 @@ def build_report(
             "**Tactic progression:** "
             + " → ".join(summary["tactic_sequence"]),
         ]
+
+    lines += _source_sections(summary, context or {})
 
     if triage is None:
         lines += ["", "---", "_This report contains correlation data only. AI triage is pending._"]
@@ -159,8 +209,9 @@ def build_report(
     if verdict.remediation_recommendations:
         lines += ["", "## Recommended remediation", ""]
         lines += [f"- {item}" for item in verdict.remediation_recommendations]
-        lines += ["", "_Recommendations only. LogLookup never executes "
-                  "response actions._"]
+        lines += ["", "_Recommendations only. Nothing is executed "
+                  "automatically; any response workflow requires explicit "
+                  "human approval._"]
 
     lines += [
         "",

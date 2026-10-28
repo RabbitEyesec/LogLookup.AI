@@ -152,6 +152,21 @@ Open **Settings** to update the AI provider or SIEM connection. In managed mode,
 
 Changing the SIEM index, severity floor, correlation policy, or risk threshold affects future ingestion and chain formation. Coordinate those changes with the team responsible for detections and incident handling.
 
+## 11a. Connect More Sources (v2)
+
+Open **Sources** in the left navigation. Each connection is a card with its own state: **Healthy**, **Paused**, **Not configured**, **Permission denied**, **Limited by licence**, **Throttled** or **Temporarily unavailable**. A source that is disabled or failing is never shown as healthy.
+
+1. Choose **Add a connection**, pick the provider (Elastic, Sentinel, Splunk, Defender XDR, Entra ID) and give it an id.
+2. Paste the non-secret options as JSON (tenant, workspace, management URL, indexes). See `docs/v2/provider-configuration.md` for each provider.
+3. Enter the credential. It is stored encrypted and is never shown again.
+4. The connection saves **disabled**. Enable it once its permissions are in place.
+
+Each incident shows source badges (for example Sentinel and Defender XDR). Open the **Investigation** tab for revision, status, source coverage, the risk breakdown, linked identity context and provider links; **Evidence** for the vendor record behind each alert (hash, ids, timestamps; the raw payload is behind an audited button).
+
+### Respond
+
+The **Response** tab lists the workflows the administrator has enabled. Pick one, fill the fields, and review the **exact outbound payload** before requesting approval. A responder approves or rejects; some workflows do not allow the requester to approve their own request. The card shows three separate statuses - LogLookup dispatch, the workflow run, and the downstream effect. A workflow accepting the request is not proof that anything changed. If delivery is unknown the action waits for a responder to reconcile it; it is never resent automatically.
+
 ## 12. Troubleshooting
 
 ### The dashboard does not open

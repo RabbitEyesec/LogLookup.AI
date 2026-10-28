@@ -1,4 +1,4 @@
-# LogLookup AI engine  systemd user service.
+# LogLookup AI v2 engine  systemd user service.
 # Installed to ~/.config/systemd/user/loglookup.service by deploy/install.sh.
 #
 #   systemctl --user status loglookup     health at a glance
@@ -22,14 +22,28 @@ RestartSec=5
 TimeoutStartSec=90
 TimeoutStopSec=30
 WatchdogSec=120
-# Graceful shutdown: uvicorn drains connections on SIGTERM (the default
-# KillSignal), then the engine closes the SIEM connector cleanly.
+# Graceful shutdown (v2): SIGTERM -> uvicorn drains requests -> source workers
+# are cancelled and their HTTP clients closed -> the response dispatcher stops
+# (an in-flight send is NOT retried; it resumes as reconciliation_required) ->
+# the SQLite WAL is checkpointed. TimeoutStopSec bounds the whole sequence.
+KillMode=mixed
+SuccessExitStatus=143
 
-# Hardening (user-service scope)
+# Hardening (user-service scope). The durable store lives under
+# LOGLOOKUP_HOME (var/loglookup-v2.sqlite3), the only writable data path.
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+PrivateDevices=true
+ProtectSystem=strict
 ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+UMask=0077
 ReadWritePaths=%h/.config/loglookup %h/.local/share/loglookup
 
 [Install]

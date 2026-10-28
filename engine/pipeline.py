@@ -72,6 +72,7 @@ class Pipeline:
         self._config = config
         self._file_adapter = get_adapter("file")
         self._siem_adapter = get_adapter(config.siem.type)
+        self._source_adapters: dict[str, Any] = {}
         self._prefilter = PreFilter(config.prefilter, config.siem)
         self.correlator = CorrelationEngine(config.correlation)
         self._result = PipelineResult()
@@ -79,10 +80,9 @@ class Pipeline:
     def process(self, record: RawRecord) -> None:
         """Run one raw record through normalize -> prefilter -> correlate."""
         self._result.ingested += 1
-        adapter = (
-            self._file_adapter if record.source == "file" else self._siem_adapter
-        )
-        alert = adapter.parse(record)
+        alert = self._adapter_for(record).parse(record)
+        if record.envelope is not None:
+            alert = self._attach_provenance(alert, record)
         self._result.normalized += 1
         if alert.has_parse_errors:
             self._result.parse_flagged += 1
@@ -92,6 +92,34 @@ class Pipeline:
             return
         self.correlator.add(alert)
         self._result.correlated += 1
+
+    def _adapter_for(self, record: RawRecord):
+        if record.source == "file":
+            return self._file_adapter
+        if record.source in ("sentinel", "splunk", "defender_xdr"):
+            adapter = self._source_adapters.get(record.source)
+            if adapter is None:
+                adapter = self._source_adapters[record.source] = get_adapter(
+                    record.source)
+            return adapter
+        return self._siem_adapter
+
+    @staticmethod
+    def _attach_provenance(alert, record: RawRecord):
+        """Bind a v2 alert to its source without altering the OCSF shape.
+
+        Provenance rides in ``unmapped["source"]``. For non-Elastic sources
+        the finding uid is scoped to the connection so equal vendor ids from
+        two deployments can never collide inside the correlator; Elastic
+        uids are left untouched to keep existing chains and links stable.
+        """
+        env = record.envelope
+        alert.unmapped["source"] = env.provenance_ref()
+        if env.provider != "elastic" and alert.finding_info.uid:
+            alert.finding_info.uid = f"{env.connection_id}:{alert.finding_info.uid}"
+        elif env.provider != "elastic":
+            alert.finding_info.uid = f"{env.connection_id}:{env.source_event_id}"
+        return alert
 
     def evaluate(self, *, flush: bool = False) -> PipelineResult:
         """Correlate what's ready and refresh the run summary."""

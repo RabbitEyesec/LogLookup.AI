@@ -1,6 +1,17 @@
-# LogLookup AI — example configuration (Master Specification section 7.1).
+# LogLookup AI v2 — example configuration.
 # Copy to config.yaml and adjust. API keys come from environment variables
 # (${...}) and are NEVER written into this file.
+#
+# Single-source mode: the `siem:` block below keeps working exactly as before
+# and appears in the UI as connection `elastic-default`.
+# Multi-source mode: add entries under `sources:`. Credentials for a source are
+# never written here - they are stored encrypted by the application (Settings >
+# Connections) or injected as LOGLOOKUP_AUTH_<AUTH_PROFILE_ID> (upper-case,
+# non-alphanumerics as underscores) for config-file deployments.
+
+app:
+  version: '2.0'
+  scope_id: org-local              # every record carries this isolation scope
 
 siem:
   type: elastic
@@ -38,6 +49,8 @@ correlation:
       5: 16     # Critical
       6: 32     # Fatal
     surface_threshold: 10
+    # Added per extra independent source provider confirming the same chain.
+    independent_source_weight: 4.0
     # A reversed / logically conflicting ATT&CK tactic sequence is downgraded
     # (likely misconfiguration, not an intrusion).
     misconfiguration_downgrade: 0.5
@@ -73,3 +86,78 @@ ai:
 output:
   results_index: loglookup-results
   dashboard_base_url: http://localhost:8080
+
+# ---------------------------------------------------------------------------
+# v2: durable operational store (SQLite WAL, one writer per application home)
+# ---------------------------------------------------------------------------
+storage:
+  driver: sqlite
+  db_path: var/loglookup-v2.sqlite3   # relative paths resolve under the app home
+  wal: true
+  evidence_encryption: true           # raw vendor payloads are always encrypted
+  raw_retention_days: 30              # encrypted payloads older than this are dropped; hashes and metadata stay
+
+# ---------------------------------------------------------------------------
+# v2: read-only source connections. All start disabled; enable one at a time
+# once its auth profile exists. example.invalid is a non-routable placeholder.
+# ---------------------------------------------------------------------------
+sources:
+  - id: elastic-prod
+    provider: elastic
+    enabled: false
+    poll_seconds: 60
+    auth_profile_id: elastic-prod-key
+    options:
+      host: https://elastic.example.invalid:9200
+      alert_index: .alerts-security
+  - id: sentinel-main
+    provider: sentinel                # Azure Monitor Logs query API (KQL)
+    enabled: false
+    poll_seconds: 90
+    lookback_seconds: 300
+    auth_profile_id: azure-reader
+    options:
+      tenant_id: 00000000-0000-0000-0000-000000000000
+      workspace_id: 00000000-0000-0000-0000-000000000000
+      cloud_environment: public      # public | usgov | china
+      enabled_tables: [SecurityAlert]
+      max_rows: 500
+  - id: splunk-es
+    provider: splunk                  # REST search (SPL) with token auth
+    enabled: false
+    poll_seconds: 90
+    auth_profile_id: splunk-reader
+    options:
+      management_url: https://splunk.example.invalid:8089
+      indexes: [notable]             # allowlisted indexes only
+      search_mode: export            # export | jobs
+  - id: defender-xdr
+    provider: defender_xdr            # Microsoft Graph Security alerts_v2 + incidents
+    enabled: false
+    auth_profile_id: graph-reader
+    options:
+      tenant_id: 00000000-0000-0000-0000-000000000000
+      streams: [alerts, incidents]
+  - id: entra-id
+    provider: entra_id                # sign-ins + directory audits (context only)
+    enabled: false
+    auth_profile_id: graph-reader
+    options:
+      tenant_id: 00000000-0000-0000-0000-000000000000
+      streams: [signins, directory_audits]
+
+# ---------------------------------------------------------------------------
+# v2: outbound response channel. Off by default; nothing is ever dispatched
+# without an explicit, recorded approval.
+# ---------------------------------------------------------------------------
+outputs:
+  logic_apps:
+    enabled: false
+    auth_profile_id: logic-app-dispatch
+    allowed_workflows: [notify-soc-v1, create-incident-v1]
+    require_explicit_approval: true   # cannot be disabled
+    unknown_delivery_policy: reconcile # ambiguous sends are never auto-retried
+
+# Reverse-proxy identity (only peers listed here may assert X-Forwarded-User).
+access:
+  trusted_proxy_ips: []

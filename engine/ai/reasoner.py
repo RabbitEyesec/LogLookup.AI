@@ -112,12 +112,18 @@ class TriageReasoner:
         return create
 
     async def triage(
-        self, engine: CorrelationEngine, cluster: Cluster
+        self, engine: CorrelationEngine, cluster: Cluster,
+        context: dict | None = None,
     ) -> TriageResult:
-        """Produce a grounded verdict for one formed attack chain."""
+        """Produce a grounded verdict for one formed attack chain.
+
+        ``context`` carries deterministic, already-collected supporting
+        evidence (identity observations). The model never fetches anything.
+        """
         provider = self._providers.current
         payload = build_payload(
-            engine, cluster, max_chars=self._config.max_evidence_chars
+            engine, cluster, max_chars=self._config.max_evidence_chars,
+            context=context,
         )
         candidates = self._retriever.retrieve(
             payload.rag_query, k=self._config.rag.top_k
@@ -169,6 +175,7 @@ class TriageReasoner:
             verdict,
             candidate_uids={c.uid for c in candidates},
             evidence_fields=payload.evidence_fields,
+            evidence_refs=payload.evidence_refs,
         )
         if not validation.grounded:
             logger.warning(

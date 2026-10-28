@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Iterator
 import msgspec
 
 from engine.connectors.elastic import ElasticConnector
+from engine.envelope import SourceEnvelope
 from engine.normalize.timeutil import now_utc_iso
 
 logger = logging.getLogger(__name__)
@@ -35,10 +36,12 @@ class IngestError(Exception):
 class RawRecord:
     """One source event, exactly as received."""
 
-    source: str  # "file" | "elastic"
+    source: str  # "file" | "elastic" | "sentinel" | "splunk" | "defender_xdr" | ...
     payload: dict[str, Any]  # decoded event (Elastic: the full hit)
     raw: bytes  # original event bytes, unaltered
     received_at: str  # ingestion time, UTC ISO-8601 Z
+    #: v2 provenance wrapper; None for legacy file/Elastic callers.
+    envelope: SourceEnvelope | None = None
 
 
 def _decode_json_line(line: bytes, source: str) -> RawRecord:

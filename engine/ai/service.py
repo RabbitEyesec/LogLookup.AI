@@ -62,6 +62,9 @@ class TriageService:
         #: cluster_id -> fingerprint of the chain state last processed, so
         #: unchanged chains are not re-triaged (and re-written) every cycle.
         self._fingerprints: dict[str, tuple] = {}
+        #: optional ``async (summary) -> {"identity": ..., "actions": [...]}``
+        #: installed by the v2 runtime; supplies deterministic context only.
+        self.context_provider: Optional[Callable] = None
 
     # -- AI stack (lazy, honest about unavailability) --------------------------
 
@@ -154,6 +157,13 @@ class TriageService:
                 if status.reachable is False:
                     return existing
         summary = engine.cluster_summary(cluster)
+        context: dict[str, Any] = {}
+        if self.context_provider is not None:
+            try:
+                context = await self.context_provider(summary) or {}
+            except Exception:  # context is additive; never block triage on it
+                logger.exception("context provider failed for %s",
+                                 cluster.cluster_id)
         dashboard_url = self._config.output.dashboard_url_for(
             cluster.cluster_id
         )
@@ -164,7 +174,8 @@ class TriageService:
         if self._ai_enabled and (force or self.in_scope(cluster)):
             if self.ai_available:
                 try:
-                    triage = await self._reasoner.triage(engine, cluster)
+                    triage = await self._reasoner.triage(
+                        engine, cluster, context=context or None)
                 except TriageError as exc:
                     triage_status = TRIAGE_STATUS_AI_UNAVAILABLE
                     # First line only: the document needs the reason, the
@@ -176,7 +187,8 @@ class TriageService:
                 triage_error = self.ai_disabled_reason
 
         report_markdown = build_report(
-            summary, triage, kb=self._kb, dashboard_url=dashboard_url
+            summary, triage, kb=self._kb, dashboard_url=dashboard_url,
+            context=context,
         )
         doc = build_writeback_doc(
             summary,

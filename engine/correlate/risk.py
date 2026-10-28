@@ -25,6 +25,9 @@ from engine.correlate.engine import Cluster, CorrelationEngine
 
 logger = logging.getLogger(__name__)
 
+#: bump when component weights or semantics change (stored per revision)
+RISK_RULE_VERSION = "2.0"
+
 
 class RiskScorer:
     """Deterministic cumulative entity risk + threshold surfacing."""
@@ -53,9 +56,35 @@ class RiskScorer:
             for entity_uid in cluster.entity_uids
             if (entity := engine.resolver.get(entity_uid)) is not None
         ]
-        risk = max(entity_risks, default=0.0)
+        severity_evidence = max(entity_risks, default=0.0)
+
+        # Independent confirmation: each *additional* source provider that
+        # contributed an alert to the chain. Duplicate representations of
+        # one alert never reach the correlator (ledger alias suppression),
+        # so a second API wrapping the same alert cannot add weight here.
+        providers = sorted({
+            (alert.unmapped.get("source") or {}).get("provider")
+            for alert in engine.alerts_of(cluster)
+            if (alert.unmapped.get("source") or {}).get("provider")
+        })
+        cluster.source_providers = providers
+        confirmation = self._config.independent_source_weight * max(
+            0, len(providers) - 1
+        )
+        subtotal = severity_evidence + confirmation
+        downgrade = 0.0
         if cluster.disposition == chains.REVERSED:
-            risk *= self._config.misconfiguration_downgrade
+            downgrade = -subtotal * (1 - self._config.misconfiguration_downgrade)
+        risk = subtotal + downgrade
+        cluster.risk_breakdown = {
+            "rule_version": RISK_RULE_VERSION,
+            "severity_evidence": severity_evidence,
+            "independent_source_confirmation": confirmation,
+            "supported_attack_progression": 0.0,
+            "documented_benign_or_conflicting_context": downgrade,
+            "independent_providers": providers,
+            "total": risk,
+        }
         cluster.risk_score = risk
         if not cluster.surfaced and risk >= self._config.surface_threshold:
             cluster.surfaced = True

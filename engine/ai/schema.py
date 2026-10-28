@@ -58,3 +58,8 @@ class AlertTriageVerdict(BaseModel):
         "Concrete remediation / next investigation steps. Recommendations "
         "only — this tool never executes actions."
     ))
+    evidence_refs: List[str] = Field(default_factory=list, description=(
+        "Source evidence references (SRC:<connection>:<kind>:<id>) copied "
+        "verbatim from the evidence_ref attributes in the input that justify "
+        "the verdict. Never invent a reference."
+    ))

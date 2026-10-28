@@ -18,7 +18,7 @@ MAPPINGS_DIR = Path(__file__).parent / "mappings"
 
 
 class AdapterNotImplemented(NotImplementedError):
-    """Raised by documented stub adapters (splunk, sentinel)."""
+    """Raised by adapters that exist as documented placeholders."""
 
 
 class AdapterInterface(ABC):
@@ -71,6 +71,7 @@ class MappedAdapter(AdapterInterface):
 
 def get_adapter(source_type: str, **kwargs) -> AdapterInterface:
     """Router: identify source -> SourceAdapter."""
+    from engine.normalize.adapters.defender_xdr_adapter import DefenderXdrAdapter
     from engine.normalize.adapters.elastic_adapter import ElasticAdapter
     from engine.normalize.adapters.file_adapter import FileAdapter
     from engine.normalize.adapters.sentinel_adapter import SentinelAdapter
@@ -81,6 +82,7 @@ def get_adapter(source_type: str, **kwargs) -> AdapterInterface:
         "file": FileAdapter,
         "splunk": SplunkAdapter,
         "sentinel": SentinelAdapter,
+        "defender_xdr": DefenderXdrAdapter,
     }
     try:
         adapter_cls = adapters[source_type.lower()]
@@ -90,3 +92,14 @@ def get_adapter(source_type: str, **kwargs) -> AdapterInterface:
             f"{sorted(adapters)}"
         ) from None
     return adapter_cls(**kwargs)
+
+
+def get_context_adapter(provider: str):
+    """Context (non-detection) adapters, keyed by provider."""
+    from engine.normalize.adapters.entra_context_adapter import EntraContextAdapter
+
+    adapters = {"entra_id": EntraContextAdapter}
+    try:
+        return adapters[provider.lower()]()
+    except KeyError:
+        raise KeyError(f"no context adapter for provider {provider!r}") from None

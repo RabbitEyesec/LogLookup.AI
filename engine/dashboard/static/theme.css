@@ -1002,3 +1002,64 @@ mark.search-hit { color: var(--text); background: rgba(255,214,0,.3); }
 .report blockquote { border-left: 2px solid var(--sev-high); padding: 2px 12px; color: var(--sev-high); margin: 8px 0; font-size: 12px; }
 .report hr { border: none; border-top: 1px solid var(--hair); margin: 14px 0; }
 .report a { color: var(--signal); }
+
+
+/* ============ v2: sources, multi-source evidence, response ============ */
+
+.v2-drawer { width: min(460px, 96vw); }
+.v2-drawer-head { display: flex; justify-content: space-between; align-items: center; }
+.v2-drawer-head button { background: transparent; border: 0; color: var(--muted); font-size: 18px; cursor: pointer; }
+#v2-body { display: flex; flex-direction: column; gap: 10px; }
+.v2-card {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 10px 12px; background: var(--s1);
+  border: 1px solid var(--hair-2); border-radius: var(--r2);
+}
+.v2-link { text-decoration: none; color: inherit; }
+.v2-link:hover { border-color: var(--hair-3); background: var(--s3); }
+.v2-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.v2-card-head strong { font-size: 12.5px; color: var(--text); }
+.v2-meta { font-size: 11px; color: var(--dim); font-family: var(--font-mono); overflow-wrap: anywhere; }
+.v2-meta--err { color: var(--sev-critical); }
+.v2-meta--warn { color: var(--sev-medium); }
+.v2-legend, .v2-empty { font-size: 11px; color: var(--faint); }
+.v2-empty { padding: 10px 2px; }
+.v2-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--muted); }
+.v2-kv code { font-family: var(--font-mono); color: var(--text); overflow-wrap: anywhere; text-align: right; }
+.v2-badges { display: flex; gap: 6px; flex-wrap: wrap; }
+.v2-raw {
+  max-height: 260px; overflow: auto; margin: 0; padding: 8px;
+  background: var(--bg); border: 1px solid var(--hair); border-radius: var(--r2);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); white-space: pre-wrap;
+}
+.v2-add { border: 1px dashed var(--hair-3); border-radius: var(--r2); padding: 8px 10px; }
+.v2-add summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.v2-add label, .v2-card label { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--dim); margin-top: 6px; }
+.v2-add input, .v2-add select, .v2-add textarea, .v2-card input, .v2-card select, .v2-card textarea {
+  background: var(--s0); color: var(--text); border: 1px solid var(--hair-2);
+  border-radius: var(--r2); padding: 6px 8px; font-family: var(--font-mono); font-size: 11px;
+}
+
+/* Source states are intentionally distinct; only a healthy source uses the
+   signal colour, and a failing or disabled source can never look healthy. */
+.v2-status, .v2-badge {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .5px;
+  text-transform: uppercase; padding: 2px 6px; border-radius: 3px;
+  border: 1px solid var(--hair-3); color: var(--muted);
+}
+.v2-status--healthy { color: var(--signal); border-color: var(--signal-edge); }
+.v2-status--paused { color: var(--muted); border-style: dashed; }
+.v2-status--not_configured { color: var(--faint); border-style: dotted; }
+.v2-status--permission_denied { color: var(--sev-critical); border-color: rgba(255,23,68,.45); }
+.v2-status--limited_by_license { color: var(--sev-medium); border-color: rgba(255,171,0,.45); }
+.v2-status--throttled { color: var(--sev-medium); border-style: dashed; }
+.v2-status--temporarily_unavailable { color: var(--sev-high); border-color: rgba(255,109,0,.45); }
+.v2-status--starting { color: var(--dim); }
+.v2-card[data-status="permission_denied"] { border-left: 2px solid var(--sev-critical); }
+.v2-card[data-status="temporarily_unavailable"],
+.v2-card[data-status="throttled"] { border-left: 2px solid var(--sev-medium); }
+.v2-status--reconciliation_required, .v2-status--failed_without_effect { color: var(--sev-high); border-color: rgba(255,109,0,.45); }
+.v2-status--acknowledged, .v2-status--completed { color: var(--text); }
+.v2-badge--elastic { border-color: #FEC514; } .v2-badge--sentinel { border-color: #0078D4; }
+.v2-badge--splunk { border-color: #65A637; } .v2-badge--defender_xdr { border-color: #00A4EF; }
+.v2-badge--entra_id { border-color: #7FBA00; }

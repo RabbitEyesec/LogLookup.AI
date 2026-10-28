@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 234 56" width="234" height="56" role="img" aria-label="MITRE ATT&amp;CK">
+  <title>MITRE ATT&amp;CK</title>
+  <rect x="1" y="1" width="232" height="54" rx="12" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="2"/>
+  <rect x="1" y="1" width="8" height="54" rx="4" fill="#B91C1C"/>
+  <text x="22" y="26" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#1F2328">MITRE ATT&amp;CK</text>
+  <text x="22" y="43" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606A">Technique retrieval &amp; grounding</text>
+</svg>

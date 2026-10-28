@@ -352,6 +352,8 @@ function renderHeader() {
   }
   chips.append(
     el("span", { class: "chip" }, `${alerts.length} Events`),
+    ...(chain.sources || []).map((src) => el("span", { class: `chip src-${src.provider}`,
+      title: src.connection_id || "" }, `${src.provider.replace("_", " ")} · ${src.alert_count}`)),
     el("span", { class: "chip" }, `${hosts.size} Hosts`),
     el("span", { class: "chip" }, `${users.size} Users`),
     el("span", { class: "chip live" },

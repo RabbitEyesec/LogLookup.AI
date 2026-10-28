@@ -45,6 +45,11 @@ class EvidencePayload:
     #: field key -> [(alert_uid, rendered value), ...] for citations/report
     field_values: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     truncated: bool = False
+    #: evidence references (``SRC:<connection>:<kind>:<id>``) supplied to the
+    #: model - the only references it may cite (validator ground truth)
+    evidence_refs: set[str] = field(default_factory=set)
+    #: provider -> per-alert field cap applied to fit the budget
+    source_field_caps: dict[str, int] = field(default_factory=dict)
 
     @property
     def char_count(self) -> int:
@@ -98,7 +103,8 @@ def _raw_event_of(alert: NormalizedAlert) -> Optional[dict[str, Any]]:
     return decoded if isinstance(decoded, dict) else None
 
 
-def flatten_alert(alert: NormalizedAlert) -> dict[str, str]:
+def flatten_alert(alert: NormalizedAlert,
+                  cap: int = MAX_FIELDS_PER_ALERT) -> dict[str, str]:
     """The alert's evidence fields: the raw source event, flattened.
 
     The raw event is the forensic ground truth the analyst can verify
@@ -115,8 +121,8 @@ def flatten_alert(alert: NormalizedAlert) -> dict[str, str]:
                              "category_name", "activity_id", "type_uid"):
             tree.pop(envelope_key, None)
         flat = flatten(tree)
-    if len(flat) > MAX_FIELDS_PER_ALERT:
-        flat = dict(sorted(flat.items())[:MAX_FIELDS_PER_ALERT])
+    if len(flat) > cap:
+        flat = dict(sorted(flat.items())[:cap])
     return flat
 
 
@@ -158,43 +164,79 @@ def build_rag_query(engine: CorrelationEngine, cluster: Cluster) -> str:
     return "\n".join(unique)
 
 
+MIN_FIELDS_PER_ALERT = 6
+
+
+def _provider_of(alert: NormalizedAlert) -> str:
+    return (alert.unmapped.get("source") or {}).get("provider") or "legacy"
+
+
 def build_payload(
     engine: CorrelationEngine,
     cluster: Cluster,
     *,
     max_chars: int = 24000,
+    context: Optional[dict[str, Any]] = None,
 ) -> EvidencePayload:
-    """Package one formed attack chain for the reasoning layer."""
+    """Package one formed attack chain for the reasoning layer.
+
+    v2: every alert carries its source and a citable ``evidence_ref``; a
+    ``<source_coverage>`` block states which sources contributed (and which
+    did not); identity context (sign-ins, directory changes) is included as
+    context, never as detections. When the evidence budget is exceeded the
+    per-alert field cap is reduced *per source* - the noisiest source gives
+    up detail first - instead of truncating whichever alerts happen to be
+    last.
+    """
     alerts = engine.alerts_of(cluster)
     payload = EvidencePayload(
         cluster_id=cluster.cluster_id,
         xml="",
         rag_query=build_rag_query(engine, cluster),
     )
+    providers = sorted({_provider_of(a) for a in alerts})
+    caps = {p: MAX_FIELDS_PER_ALERT for p in providers}
 
-    alert_sections: list[str] = []
+    def render(caps: dict[str, int]) -> tuple[str, dict[str, int]]:
+        sizes = {p: 0 for p in providers}
+        sections: list[str] = []
+        for alert in alerts:
+            provider = _provider_of(alert)
+            flat = flatten_alert(alert, caps[provider])
+            src = alert.unmapped.get("source") or {}
+            attrs = ""
+            if src:
+                attrs = (f' source="{escape(provider)}" '
+                         f'connection="{escape(str(src.get("connection_id", "")))}" '
+                         f'evidence_ref="{escape(str(src.get("evidence_ref", "")))}"')
+            lines = [
+                f'  <alert uid="{escape(alert.uid)}" '
+                f'time="{escape(alert.time_dt)}" '
+                f'severity="{escape(alert.severity_label())}"{attrs}>',
+                f"    title: {escape(alert.finding_info.title)}",
+            ]
+            entities = sorted(
+                entity.display_name
+                for entity in engine.resolution_of(alert.uid).entities
+            )
+            lines.append(f"    resolved_entities: {escape(', '.join(entities))}")
+            for key in sorted(flat):
+                lines.append(f"    {escape(key)}: {escape(flat[key])}")
+            lines.append("  </alert>")
+            text = "\n".join(lines)
+            sizes[provider] += len(text)
+            sections.append(text)
+        return "\n".join(sections), sizes
+
     ti_lines: list[str] = []
     for alert in alerts:
-        flat = flatten_alert(alert)
-        for key, value in flat.items():
+        flat_all = flatten_alert(alert)
+        for key, value in flat_all.items():
             payload.evidence_fields.add(key)
             payload.field_values.setdefault(key, []).append((alert.uid, value))
-        lines = [
-            f'  <alert uid="{escape(alert.uid)}" '
-            f'time="{escape(alert.time_dt)}" '
-            f'severity="{escape(alert.severity_label())}">',
-            f"    title: {escape(alert.finding_info.title)}",
-        ]
-        entities = sorted(
-            entity.display_name
-            for entity in engine.resolution_of(alert.uid).entities
-        )
-        lines.append(f"    resolved_entities: {escape(', '.join(entities))}")
-        for key in sorted(flat):
-            lines.append(f"    {escape(key)}: {escape(flat[key])}")
-        lines.append("  </alert>")
-        alert_sections.append("\n".join(lines))
-
+        ref = (alert.unmapped.get("source") or {}).get("evidence_ref")
+        if ref:
+            payload.evidence_refs.add(ref)
         for tag in _alert_attack_tags(alert):
             line = f"  {escape(alert.uid)}: pre-tagged ATT&CK {escape(tag)}"
             if line not in ti_lines:
@@ -227,19 +269,76 @@ def build_payload(
             f"{escape(identifiers)}</entity>"
         )
 
-    xml = (
-        "<alert_cluster>\n"
-        + header + "\n"
-        + "\n".join(alert_sections)
-        + "\n</alert_cluster>\n"
-        "<threat_intelligence_enrichment>\n"
-        + ("\n".join(ti_lines) if ti_lines
-           else "  (no pre-tagged threat intelligence on these alerts)")
-        + "\n</threat_intelligence_enrichment>\n"
-        "<asset_context>\n"
-        + ("\n".join(asset_lines) if asset_lines else "  (no resolved entities)")
-        + "\n</asset_context>"
-    )
+    coverage_lines = [
+        f'  <source provider="{escape(s["provider"])}" '
+        f'connection="{escape(s["connection_id"])}" '
+        f'alerts="{s["alert_count"]}"/>'
+        for s in engine.cluster_sources(cluster)
+        if s["provider"] != "legacy"
+    ]
+    breakdown = cluster.risk_breakdown or {}
+    if breakdown:
+        coverage_lines.append(
+            "  risk_components: "
+            + escape(", ".join(
+                f"{k}={breakdown[k]}" for k in (
+                    "severity_evidence", "independent_source_confirmation",
+                    "documented_benign_or_conflicting_context") if k in breakdown)))
+    identity_lines = []
+    identity = (context or {}).get("identity") or {}
+    for obs in (identity.get("observations") or [])[:30]:
+        attrs = obs.get("attributes") or {}
+        brief = "; ".join(f"{k}={attrs[k]}" for k in (
+            "app", "ip", "result", "failure_reason", "activity", "category",
+            "conditional_access_status") if attrs.get(k) not in (None, ""))
+        identity_lines.append(
+            f'  <observation type="{escape(str(obs.get("type")))}" '
+            f'principal="{escape(str(obs.get("principal")))}" '
+            f'time="{escape(str(obs.get("event_time")))}" '
+            f'evidence_ref="{escape(str(obs.get("source_ref")))}">'
+            f"{escape(brief)}</observation>")
+        if obs.get("source_ref"):
+            payload.evidence_refs.add(str(obs["source_ref"]))
+
+    def assemble(body: str) -> str:
+        parts = [
+            "<alert_cluster>\n" + header + "\n" + body + "\n</alert_cluster>",
+            "<threat_intelligence_enrichment>\n"
+            + ("\n".join(ti_lines) if ti_lines
+               else "  (no pre-tagged threat intelligence on these alerts)")
+            + "\n</threat_intelligence_enrichment>",
+            "<asset_context>\n"
+            + ("\n".join(asset_lines) if asset_lines else "  (no resolved entities)")
+            + "\n</asset_context>",
+        ]
+        if coverage_lines:
+            parts.append("<source_coverage>\n" + "\n".join(coverage_lines)
+                         + "\n</source_coverage>")
+        if identity_lines or identity.get("principals"):
+            parts.append(
+                "<identity_context note=\"supporting observations, not detections\">\n"
+                + ("\n".join(identity_lines) if identity_lines
+                   else "  (no linked sign-in or directory records)")
+                + "\n</identity_context>")
+        return "\n".join(parts)
+
+    body, sizes = render(caps)
+    xml = assemble(body)
+    # Budget fit: the source with the largest footprint gives up detail first.
+    guard = 0
+    while len(xml) > max_chars and guard < 24:
+        guard += 1
+        reducible = [p for p in providers if caps[p] > MIN_FIELDS_PER_ALERT]
+        if not reducible:
+            break
+        victim = max(reducible, key=lambda p: (sizes[p], p))
+        caps[victim] = max(MIN_FIELDS_PER_ALERT, caps[victim] // 2)
+        body, sizes = render(caps)
+        xml = assemble(body)
+    payload.source_field_caps = {p: c for p, c in caps.items()
+                                 if c < MAX_FIELDS_PER_ALERT}
+    if payload.source_field_caps:
+        payload.truncated = True
     if len(xml) > max_chars:
         xml = xml[: max_chars - len(TRUNCATION_NOTE) - 1] + "\n" + TRUNCATION_NOTE
         payload.truncated = True

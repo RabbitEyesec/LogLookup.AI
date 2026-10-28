@@ -48,6 +48,7 @@ def build_writeback_doc(
         "cluster_id": cluster_id,
         "dashboard_url": output.dashboard_url_for(cluster_id),
         "source": "loglookup-ai",
+        "schema_version": "2.0",
         "written_at": now_utc_iso(),
         "chain": {
             "alert_count": summary["alert_count"],
@@ -60,6 +61,9 @@ def build_writeback_doc(
             "disposition": summary["disposition"],
             "risk_score": summary["risk_score"],
             "surfaced": summary["surfaced"],
+            # additive v2 fields; legacy consumers ignore them
+            "risk_breakdown": summary.get("risk_breakdown", {}),
+            "sources": summary.get("sources", []),
         },
     }
     if triage is not None:

@@ -1,0 +1,71 @@
+# Splunk search result / ES notable -> OCSF DetectionFinding (CIM-style names).
+# Site-specific field names: use the connection's `field_aliases` option.
+source: splunk
+
+timestamp:
+  fields:
+    - _time
+  default_offset_minutes: 0
+
+severity:
+  fields:
+    - urgency
+    - severity
+
+fields:
+  - target: finding_info.title
+    sources: [rule_title, rule_name, search_name, signature]
+    transform: first
+    default: Unknown finding
+  - target: finding_info.uid
+    sources: [event_id, _cd]
+    transform: first
+  - target: finding_info.desc
+    sources: [rule_description, description]
+    transform: first
+  - target: finding_info.analytic.name
+    sources: [rule_name, search_name]
+    transform: first
+  - target: message
+    sources: [signature, _raw]
+    transform: first
+  - target: device.hostname
+    sources: [dest_host, dest, host]
+    transform: first
+  - target: device.ip
+    sources: [dest_ip]
+    transform: first
+  - target: actor.user.name
+    sources: [user]
+    transform: first
+  - target: actor.process.uid
+    sources: [process_guid]
+    transform: first
+  - target: actor.process.pid
+    sources: [process_id]
+    transform: int
+  - target: actor.process.name
+    sources: [process_name, process]
+    transform: first
+  - target: src_endpoint.ip
+    sources: [src_ip, src]
+    transform: first
+  - target: dst_endpoint.ip
+    sources: [dest_ip]
+    transform: first
+  - target: metadata.product.vendor_name
+    sources: [vendor_product]
+    default: Splunk
+  - target: metadata.product.name
+    sources: [sourcetype]
+    transform: first
+  - target: metadata.log_name
+    sources: [index]
+    transform: first
+
+attacks:
+  technique_uid:
+    - annotations.mitre_attack.mitre_technique_id
+    - mitre_technique_id
+  tactic_name:
+    - annotations.mitre_attack.mitre_tactic

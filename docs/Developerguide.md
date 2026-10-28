@@ -245,6 +245,27 @@ Keep provider-specific calls behind `AIProvider`. New output must satisfy the va
 
 Prefer extending view models in `engine/api/views.py` over recomputing security logic in JavaScript. Preserve deep links and empty/error states.
 
+### Connector or provider (v2)
+
+Implement `fetch_page` / `identify` under `engine/connectors/`, add a mapping YAML and adapter under `engine/normalize/adapters/`, and register a `ProviderSpec` in `engine/connectors/registry.py`. See `docs/v2/source-contracts.md`.
+
+### Response workflow (v2)
+
+Add a `WorkflowDef` in `engine/response/policy.py` (typed fields, approval count, separation of duties) and list its id in `outputs.logic_apps.allowed_workflows`. See `docs/v2/logic-apps-contract.md`.
+
+## 11a. v2 Development Notes
+
+```bash
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest                       # includes the v2 suites
+```
+
+- `tests/v2_helpers.py` builds a live `V2Runtime` against mocked Sentinel, Splunk, Graph and Logic Apps endpoints (`httpx.MockTransport`); use it for end-to-end tests without a vendor account.
+- API tests call the app through `httpx.ASGITransport` in the same event loop as the runtime.
+- Writes to the store go through `Database.transaction()` (one connection, serialised writers). Do not call `Database.execute` from inside a transaction.
+- Config-file sources keep state under `./var` and read credentials from `LOGLOOKUP_AUTH_<PROFILE_ID>`.
+- v2 routes: `engine/api/router_v2.py`; typed request models: `engine/api/models_v2.py`; identity: `engine/api/auth.py`.
+
 ## 12. Troubleshooting
 
 ### Configuration file not found

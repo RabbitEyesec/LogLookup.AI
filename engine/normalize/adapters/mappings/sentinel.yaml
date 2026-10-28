@@ -1,0 +1,67 @@
+# Microsoft Sentinel SecurityAlert row -> OCSF DetectionFinding.
+# `_derived` is produced by SentinelAdapter.event_of (parsed Entities JSON).
+source: sentinel
+
+timestamp:
+  fields:
+    - StartTime
+    - TimeGenerated
+  default_offset_minutes: 0
+
+severity:
+  fields:
+    - AlertSeverity
+
+fields:
+  - target: finding_info.title
+    sources: [AlertName, DisplayName]
+    default: Unknown finding
+  - target: finding_info.uid
+    sources: [SystemAlertId]
+  - target: finding_info.desc
+    sources: [Description]
+  - target: finding_info.analytic.name
+    sources: [AlertName]
+  - target: finding_info.analytic.uid
+    sources: [VendorOriginalId]
+  - target: message
+    sources: [Description, AlertName]
+  - target: device.hostname
+    sources: [_derived.host, CompromisedEntity]
+  - target: device.uid
+    sources: [_derived.host_id]
+  - target: device.domain
+    sources: [_derived.host_domain]
+  - target: device.os.name
+    sources: [_derived.os]
+  - target: actor.user.name
+    sources: [_derived.user]
+  - target: actor.user.uid
+    sources: [_derived.user_id]
+  - target: actor.user.domain
+    sources: [_derived.user_domain]
+  - target: actor.process.pid
+    sources: [_derived.process_id]
+    transform: int
+  - target: actor.process.name
+    sources: [_derived.process_name]
+  - target: actor.process.cmd_line
+    sources: [_derived.cmd_line]
+  - target: src_endpoint.ip
+    sources: [_derived.ip]
+  - target: metadata.product.vendor_name
+    sources: [VendorName]
+    default: Microsoft
+  - target: metadata.product.name
+    sources: [ProductName]
+    default: Microsoft Sentinel
+  - target: metadata.event_code
+    sources: [AlertType]
+  - target: metadata.log_name
+    sources: [ProviderName]
+
+attacks:
+  tactic_name:
+    - _derived.tactics
+  technique_uid:
+    - _derived.techniques

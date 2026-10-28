@@ -51,7 +51,7 @@ def test_report_contains_all_case_sections(correlated_pipeline, fixture_kb):
     # Cited evidence rendered with the actual raw-log values.
     assert "`evt-004` → mimikatz.exe" in report
     assert "## Recommended remediation" in report
-    assert "never executes response actions" in report
+    assert "Nothing is executed automatically" in report
     assert "ollama/foundation-sec-8b" in report
     assert "/incident/CHAIN-2026-07-11-hostA-001" in report
 

@@ -49,6 +49,8 @@ class EngineRunner:
         writeback: bool,
         ai_enabled: bool,
         cursor_store=None,
+        v2_home=None,
+        secrets=None,
     ) -> None:
         self.config = config
         self.pipeline = Pipeline(config)
@@ -72,6 +74,42 @@ class EngineRunner:
             config, writer=writer, ai_enabled=ai_enabled
         )
         self.siem_live = mode in ("poll", "batch")
+        #: durable multi-source runtime (None in file/legacy-only runs)
+        self.v2 = None
+        if v2_home is not None and secrets is not None:
+            from engine.runtime import V2Runtime
+
+            self.v2 = V2Runtime(
+                config, self.pipeline, self.service, secrets, v2_home,
+                include_legacy=self._connector is not None and self.siem_live,
+                legacy_health=self._legacy_health)
+            self._health_cache: tuple[float, dict] = (0.0, {})
+
+    async def _legacy_health(self) -> dict:
+        """Reachability of the original single-Elastic poller (cached 20 s)."""
+        import time
+
+        from engine.connectors.base import STATUS_PERMISSION_DENIED
+        from engine.connectors.elastic import ConnectorError
+
+        stamp, cached = self._health_cache
+        if cached and time.monotonic() - stamp < 20:
+            return cached
+        if self._connector is None:
+            result = {"status": "not_configured"}
+        else:
+            try:
+                await self._connector.info()
+                result = {"status": "healthy", "last_error_code": None}
+            except ConnectorError as exc:
+                denied = "rejected the credentials" in str(exc)
+                result = {
+                    "status": (STATUS_PERMISSION_DENIED if denied
+                               else "temporarily_unavailable"),
+                    "last_error_code": "permission_denied" if denied else "unreachable",
+                }
+        self._health_cache = (time.monotonic(), result)
+        return result
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -83,6 +121,8 @@ class EngineRunner:
         synchronous startup triage would leave the HTTP port unreachable
         for minutes.
         """
+        if self.v2 is not None:
+            await self.v2.start()
         if self._input_file:
             self._startup_task = asyncio.create_task(self._run_file())
         elif self._mode == "batch":
@@ -97,6 +137,8 @@ class EngineRunner:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        if self.v2 is not None:
+            await self.v2.stop()
         if self._connector is not None:
             await self._connector.aclose()
 
@@ -237,6 +279,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     host = args.host or parsed.hostname or "127.0.0.1"
     port = args.port or parsed.port or 8080
 
+    v2_kwargs = {}
+    if config.sources:
+        # Config-file sources run on the v2 runtime; state lives under ./var
+        # and credentials come from LOGLOOKUP_AUTH_<PROFILE_ID> env vars.
+        from pathlib import Path
+
+        from engine.secure.store import SecretStore
+
+        var = Path("var")
+        v2_kwargs = {"v2_home": var, "secrets": SecretStore(var)}
+
     runner = EngineRunner(
         config,
         input_file=args.input,
@@ -245,6 +298,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         until_ms=until_ms,
         writeback=args.writeback,
         ai_enabled=not args.no_ai,
+        **v2_kwargs,
     )
 
     @contextlib.asynccontextmanager
@@ -260,6 +314,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         reader=runner.reader, lifespan=lifespan,
     )
     app.state.siem_live = runner.siem_live
+    app.state.v2 = runner.v2
 
     logger.info("dashboard: http://%s:%d/", host, port)
     uvicorn.run(app, host=host, port=port, log_level=args.log_level.lower())

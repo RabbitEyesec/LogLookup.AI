@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 246 56" width="246" height="56" role="img" aria-label="Microsoft Defender XDR">
+  <title>Microsoft Defender XDR</title>
+  <rect x="1" y="1" width="244" height="54" rx="12" fill="#FFFFFF" stroke="#D0D7DE" stroke-width="2"/>
+  <rect x="1" y="1" width="8" height="54" rx="4" fill="#0078D4"/>
+  <text x="22" y="26" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#1F2328">Microsoft Defender XDR</text>
+  <text x="22" y="43" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606A">Graph Security alerts &amp; incidents</text>
+</svg>

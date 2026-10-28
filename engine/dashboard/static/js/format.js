@@ -81,6 +81,12 @@ export function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** Replace a container's children, skipping null/undefined (native
+ *  ``replaceChildren`` would render them as the text "null"). */
+export function mount(root, ...nodes) {
+  root.replaceChildren(...nodes.flat().filter((n) => n != null));
+}
+
 /* -- minimal markdown renderer (headings, tables, lists, bold, code,
  *    links, blockquotes, hr) — enough for the engine's case reports. ---- */
 

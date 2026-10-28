@@ -93,7 +93,8 @@ class ManagedSettings:
     def load(self) -> Config:
         """Typed config with secrets injected and paths rooted in the home."""
         data = self._read_yaml()
-        data.pop("app", None)
+        # ``app`` stays: it carries scope_id; config_from_dict ignores
+        # app.setup_complete.
 
         ai_section = data.setdefault("ai", {})
         rag = ai_section.setdefault("rag", {})
@@ -151,7 +152,7 @@ class ManagedSettings:
         ))
 
         data = self._read_yaml()
-        data.pop("app", None)
+        app_section = dict(data.get("app") or {})
         data["siem"] = {**(data.get("siem") or {}), **siem}
         merged_ai = {**(data.get("ai") or {}), **ai}
         merged_ai.pop("cloud_api_key", None)  # never persisted to YAML
@@ -164,7 +165,7 @@ class ManagedSettings:
 
         if secrets:
             self.secrets.set_many(secrets)
-        data["app"] = {"setup_complete": True}
+        data["app"] = {**app_section, "setup_complete": True}
         self._write_yaml(data)
         logger.info("setup complete; configuration persisted to %s",
                     self.config_path)

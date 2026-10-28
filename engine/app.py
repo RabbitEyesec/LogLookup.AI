@@ -64,6 +64,7 @@ class AppRunner:
             lifespan=self._lifespan,
         )
         self.app.state.siem_live = self.runner.siem_live
+        self.app.state.v2 = self.runner.v2
         self.app.state.on_setup_complete = self.reconfigure
         self.app.state.apply_siem = self.reconfigure
 
@@ -80,6 +81,8 @@ class AppRunner:
             writeback=live,
             ai_enabled=True,
             cursor_store=self._cursor_store,
+            v2_home=self.settings.home,
+            secrets=self.settings.secrets,
         )
 
     async def reconfigure(self, config: Config) -> None:
@@ -99,6 +102,7 @@ class AppRunner:
             state.pipeline = self.runner.pipeline
             state.reader = self.runner.reader
             state.siem_live = self.runner.siem_live
+            state.v2 = self.runner.v2
             await self.runner.start()
             logger.info(
                 "engine reconfigured (siem=%s, polling=%s)",
@@ -215,6 +219,67 @@ def cmd_status(_args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_token(args: argparse.Namespace) -> int:
+    """Manage API tokens (role-bound bearer credentials for non-local access)."""
+    from datetime import datetime, timezone
+
+    from engine.api.auth import hash_token, new_token
+    from engine.response.models import ROLES
+    from engine.store.database import Database
+
+    settings = ManagedSettings(ensure_app_home())
+    config = settings.load()
+    path = settings.home / config.storage.db_path
+
+    async def run() -> int:
+        db = await Database(path).open()
+        try:
+            if args.token_cmd == "create":
+                if args.role not in ROLES:
+                    print(f"role must be one of {list(ROLES)}", file=sys.stderr)
+                    return 2
+                token = new_token()
+                await db.execute(
+                    "INSERT INTO api_tokens VALUES (?,?,?,?,?,0)",
+                    (hash_token(token), args.user, args.role, config.scope_id,
+                     datetime.now(timezone.utc).isoformat()))
+                print(token)
+                print("store this token now; it cannot be shown again",
+                      file=sys.stderr)
+            elif args.token_cmd == "list":
+                for row in await db.fetchall(
+                        "SELECT username, role, scope_id, created_at, revoked "
+                        "FROM api_tokens ORDER BY created_at"):
+                    print(json.dumps(row))
+            elif args.token_cmd == "revoke":
+                await db.execute(
+                    "UPDATE api_tokens SET revoked=1 WHERE username=?", (args.user,))
+        finally:
+            await db.close()
+        return 0
+
+    return asyncio.run(run())
+
+
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    """Consistent copy of the durable store for safe upgrades/rollback."""
+    from engine.store.database import Database
+
+    settings = ManagedSettings(ensure_app_home())
+    path = settings.home / settings.load().storage.db_path
+
+    async def run() -> int:
+        db = await Database(path).open()
+        try:
+            dest = await db.snapshot(args.destination)
+        finally:
+            await db.close()
+        print(dest)
+        return 0
+
+    return asyncio.run(run())
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     from importlib.metadata import PackageNotFoundError, version
 
@@ -242,6 +307,21 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     status = sub.add_parser("status", help="print engine health")
     status.set_defaults(func=cmd_status)
+
+    token = sub.add_parser("token", help="manage API tokens")
+    token_sub = token.add_subparsers(dest="token_cmd", required=True)
+    tc = token_sub.add_parser("create", help="create a role-bound token")
+    tc.add_argument("--user", required=True)
+    tc.add_argument("--role", required=True,
+                    help="viewer | analyst | responder | administrator")
+    token_sub.add_parser("list", help="list tokens (hashes are never shown)")
+    tr = token_sub.add_parser("revoke", help="revoke a user's tokens")
+    tr.add_argument("--user", required=True)
+    token.set_defaults(func=cmd_token)
+
+    snap = sub.add_parser("snapshot", help="write a consistent copy of the store")
+    snap.add_argument("destination")
+    snap.set_defaults(func=cmd_snapshot)
 
     version_cmd = sub.add_parser("version", help="print the version")
     version_cmd.set_defaults(func=cmd_version)

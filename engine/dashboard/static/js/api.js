@@ -58,3 +58,29 @@ export const validateAi = (overrides) =>
 export const retriage = (id) =>
   isPreviewMode ? preview.retriage(id)
     : apiSend(`/api/clusters/${encodeURIComponent(id)}/triage`, "POST");
+
+/* ---- v2 (multi-source) API. Mutations carry a custom header: it forces a
+ * CORS preflight, so a page on another origin cannot drive the local app. ---- */
+export async function v2Get(path) {
+  return apiGet(`/api/v2${path}`);
+}
+
+export async function v2Send(path, method, payload) {
+  const response = await fetch(`/api/v2${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "X-LogLookup-Client": "1",
+    },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(body.detail)
+      ? body.detail.map((e) => `${(e.loc || []).join(".")}: ${e.msg}`).join("; ")
+      : body.detail;
+    throw new Error(detail || `${response.status} ${response.statusText}`);
+  }
+  return body;
+}

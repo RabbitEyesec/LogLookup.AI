@@ -34,10 +34,13 @@ class ValidationResult:
     original_confidence: int = 0
     final_confidence: int = 0
     notes: list[str] = field(default_factory=list)
+    verified_refs: list[str] = field(default_factory=list)
+    unverified_refs: list[str] = field(default_factory=list)
 
     @property
     def grounded(self) -> bool:
-        return not self.rejected_techniques and not self.unverified_fields
+        return (not self.rejected_techniques and not self.unverified_fields
+                and not self.unverified_refs)
 
     def as_dict(self) -> dict:
         return {
@@ -47,6 +50,8 @@ class ValidationResult:
             "unverified_fields": self.unverified_fields,
             "original_confidence": self.original_confidence,
             "final_confidence": self.final_confidence,
+            "verified_refs": self.verified_refs,
+            "unverified_refs": self.unverified_refs,
             "grounded": self.grounded,
             "notes": self.notes,
         }
@@ -56,6 +61,7 @@ def validate_verdict(
     verdict: AlertTriageVerdict,
     candidate_uids: set[str],
     evidence_fields: set[str],
+    evidence_refs: set[str] | None = None,
 ) -> ValidationResult:
     """Ground the verdict in the injected candidates and raw log fields."""
     normalized_candidates = {
@@ -84,6 +90,17 @@ def validate_verdict(
         else:
             unverified.append(cited)
 
+    verified_refs: list[str] = []
+    unverified_refs: list[str] = []
+    if evidence_refs is not None:
+        for cited in getattr(verdict, "evidence_refs", []) or []:
+            ref = cited.strip()
+            if ref in evidence_refs:
+                if ref not in verified_refs:
+                    verified_refs.append(ref)
+            else:
+                unverified_refs.append(cited)
+
     notes: list[str] = []
     final_confidence = verdict.confidence_score
     if rejected:
@@ -91,11 +108,17 @@ def validate_verdict(
             "rejected technique id(s) not present in the RAG candidate "
             f"payload: {', '.join(rejected)}"
         )
-    if unverified:
+    if unverified_refs:
         notes.append(
-            "cited evidence field(s) not found in the raw logs: "
-            f"{', '.join(unverified)}"
+            "cited evidence reference(s) were not supplied in the input: "
+            f"{', '.join(unverified_refs)}"
         )
+    if unverified or unverified_refs:
+        if unverified:
+            notes.append(
+                "cited evidence field(s) not found in the raw logs: "
+                f"{', '.join(unverified)}"
+            )
         if final_confidence > LOW_CONFIDENCE_CAP:
             notes.append(
                 f"confidence capped at {LOW_CONFIDENCE_CAP} "
@@ -111,4 +134,6 @@ def validate_verdict(
         original_confidence=verdict.confidence_score,
         final_confidence=final_confidence,
         notes=notes,
+        verified_refs=verified_refs,
+        unverified_refs=unverified_refs,
     )

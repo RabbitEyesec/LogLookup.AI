@@ -2,9 +2,9 @@
 
 ## 1. Purpose
 
-LogLookup AI is an investigation layer for Elastic Security. It retrieves security alerts, normalizes them to OCSF, groups related activity into deterministic attack chains, scores risk, and presents the resulting evidence in an analyst workspace. AI triage is optional and runs only after the chain has been formed.
+LogLookup AI is a cross-platform investigation layer for security operations. It reads alerts and identity context from Elastic Security, Microsoft Sentinel, Splunk Enterprise Security, Microsoft Defender XDR and Microsoft Entra ID, normalizes detections to OCSF, groups related activity into deterministic attack chains across those sources, scores risk with a transparent breakdown, and presents the evidence in an analyst workspace. AI triage is optional and runs only after the chain has been formed. Approved response work is handed to Azure Logic Apps.
 
-The product does not replace Elasticsearch, Kibana, or Elastic Security. Elastic remains responsible for telemetry collection, detection, and storage. LogLookup AI focuses on connecting related alerts and making the resulting evidence easier to investigate.
+LogLookup AI does not replace your SIEM, XDR or identity platform. Each remains responsible for telemetry, detection and storage; LogLookup AI connects what they report and makes the resulting evidence easier to investigate. Ingestion is read-only.
 
 ![LogLookup AI incident list](images/incident-list.png)
 
@@ -99,6 +99,15 @@ Completed result documents include the chain, risk, triage state, report, and Lo
 ![Elastic case result](images/elastic-case-writeback.png)
 
 *Figure 5. Simulated correlated activity recorded in an Elastic Security case.*
+
+### Multi-source investigation (v2)
+
+- **Five read-only connectors** - Elastic Security, Microsoft Sentinel (KQL), Splunk Enterprise / ES (SPL), Microsoft Defender XDR, Microsoft Entra ID - each an independently supervised instance with its own cursor, health state and credentials.
+- **Cross-source chains** - alerts from different platforms join one chain through shared, scope-bound identity; independent corroboration raises risk, a second API wrapping the same alert does not.
+- **Identity context** - Entra sign-ins and directory changes sit beside the chain as supporting observations, never as detections.
+- **Original evidence intact** - every record keeps its vendor payload (encrypted), content hash, source URL and timestamps; chains cite evidence references the AI can only reuse, not invent.
+- **Approval-gated response** - analysts propose allowlisted Logic Apps workflows, a responder approves, and delivery is idempotent. An ambiguous delivery is reconciled, never blindly resent. Containment actions are not part of the default workflows.
+- **Durable by default** - investigations, cursors, notes, assignments and the audit trail persist across restarts; chain ids and `/incident/<cluster_id>` links are stable.
 
 ## 5. Investigation Flow
 

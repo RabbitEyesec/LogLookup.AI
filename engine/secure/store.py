@@ -36,6 +36,11 @@ _NONCE_BYTES = 12
 SIEM_API_KEY = "siem_api_key"
 
 
+def auth_profile_name(profile_id: str) -> str:
+    """Per-connection credential slot (v2): one JSON secret per profile."""
+    return f"auth_profile:{profile_id}"
+
+
 def ai_key_name(provider: str) -> str:
     """Per-provider cloud key slot, so switching providers keeps keys."""
     return f"ai_key_{provider}"
@@ -129,6 +134,21 @@ class SecretStore:
             nonce, json.dumps(data).encode("utf-8"), _MAGIC
         )
         _write_private(self._store_path, _MAGIC + nonce + ciphertext)
+
+    def derived_key(self, purpose: str) -> bytes:
+        """32-byte subkey for ``purpose`` (HKDF-SHA256 over the store key).
+
+        Lets other components (the raw-evidence vault) encrypt at rest
+        without a second key file and without reusing the secret-store key
+        directly.
+        """
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+        return HKDF(
+            algorithm=hashes.SHA256(), length=32, salt=None,
+            info=f"loglookup:{purpose}".encode("utf-8"),
+        ).derive(self._key())
 
     # -- public API -----------------------------------------------------------
 

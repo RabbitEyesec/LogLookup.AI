@@ -67,6 +67,7 @@
         <div class="sys-row"><span class="dot" id="sys-ai-dot"></span><span class="lbl">AI</span><span class="val" id="sys-ai">—</span></div>
         <div class="sys-row"><span class="dot" id="sys-kb-dot"></span><span class="lbl">ATT&amp;CK</span><span class="val" id="sys-kb">—</span></div>
         <div class="row" style="margin-top:6px">
+          <button id="btn-v2" style="flex:1" title="Connections, source evidence and response">Sources</button>
           <button id="btn-settings" style="flex:1">Settings</button>
           <button id="btn-help" title="Keyboard shortcuts (?)">?</button>
         </div>
@@ -287,7 +288,24 @@
     </div>
   </div>
 
+  <!-- v2: connections, multi-source evidence, approval-gated response -->
+  <div class="drawer-scrim" id="v2-scrim"></div>
+  <aside class="v2-drawer drawer" id="v2-drawer" aria-label="Sources and response">
+    <div class="v2-drawer-head">
+      <h2>SOURCES &amp; RESPONSE</h2>
+      <button id="v2-close" aria-label="Close">&times;</button>
+    </div>
+    <div class="seg" id="v2-tabs" role="tablist">
+      <button data-tab="sources" class="on" role="tab">Sources</button>
+      <button data-tab="investigation" role="tab">Investigation</button>
+      <button data-tab="evidence" role="tab">Evidence</button>
+      <button data-tab="response" role="tab">Response</button>
+    </div>
+    <div id="v2-body"></div>
+  </aside>
+
   <script src="/static/vendor/3d-force-graph.min.js"></script>
   <script type="module" src="/static/js/ide.js"></script>
+  <script type="module" src="/static/js/investigations-v2.js"></script>
 </body>
 </html>
