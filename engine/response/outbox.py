@@ -45,6 +45,16 @@ class Outbox:
         item["payload"] = json.loads(item.pop("payload_json"))
         return item
 
+    async def set_state_in(self, conn, action_id: str, state: str, error: str = "",
+                           expect: str | None = None) -> bool:
+        """Compare-and-set the delivery state inside the CALLER's transaction
+        (the writer is non-reentrant, so this never opens its own)."""
+        cur = await conn.execute(
+            "UPDATE outbox SET delivery_state=?, last_error=?, updated_at=? "
+            "WHERE action_id=? AND (? IS NULL OR delivery_state=?)",
+            (state, error[:300], utcnow(), action_id, expect, expect))
+        return (cur.rowcount or 0) > 0
+
     async def finish(self, action_id: str, state: str, error: str = "") -> None:
         await self._db.execute(
             "UPDATE outbox SET delivery_state=?, last_error=?, updated_at=? "
@@ -54,6 +64,12 @@ class Outbox:
         rows = await self._db.fetchall(
             "SELECT action_id FROM outbox WHERE delivery_state='dispatching'")
         return [r["action_id"] for r in rows]
+
+    async def unsettled(self) -> list[dict[str, Any]]:
+        """Outbox rows that are still open - the only ones recovery inspects."""
+        return await self._db.fetchall(
+            "SELECT action_id, delivery_state FROM outbox WHERE delivery_state "
+            "IN ('queued','dispatching')")
 
     async def backlog(self) -> dict[str, int]:
         rows = await self._db.fetchall(

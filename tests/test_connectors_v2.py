@@ -176,8 +176,12 @@ async def test_sentinel_full_page_continues_instead_of_dropping_rows():
     c, _ = sentinel(vendors, clock=lambda: datetime(2026, 10, 28, 0, 5, tzinfo=timezone.utc),
                     max_rows=3)
     page = await c.fetch_page(None)
+    # continuation is keyed on the last (time, id) pair, not a timestamp hop
     assert not page.window_complete and page.next_cursor["continue"] is True
-    assert page.next_cursor["page_start"].startswith("2026-10-28T00:00:02")
+    assert page.next_cursor["last_source_id"] == "a2"
+    assert page.next_cursor["last_time"] == "2026-10-28T00:00:02Z"
+    assert page.next_cursor["cursor_version"] == 2
+    assert "PAGE_LIMIT_REACHED" in page.source_warnings
 
 
 # -- Splunk ---------------------------------------------------------------------------
@@ -190,18 +194,20 @@ def splunk(vendors=None, **options):
         "tok", transport=httpx.MockTransport(vendors.handler)), vendors
 
 
-async def test_splunk_uses_v2_export_with_bounded_index_time_window():
+async def test_splunk_uses_a_snapshot_job_with_bounded_index_time_window():
     vendors = MockVendors()
     vendors.splunk_rows = [{"_cd": "1:1", "index": "notable", "rule_name": "x"}]
     c, _ = splunk(vendors)
     page = await c.fetch_page(None)
-    req = vendors.requests[-1]
-    assert req.url.path == "/services/search/v2/jobs/export"
-    assert req.headers["authorization"] == "Bearer tok"
-    form = dict(httpx.QueryParams(req.content.decode()))
+    create = next(r for r in vendors.requests
+                  if r.method == "POST" and r.url.path.endswith("/search/v2/jobs"))
+    assert create.headers["authorization"] == "Bearer tok"
+    form = dict(httpx.QueryParams(create.content.decode()))
     assert form["output_mode"] == "json"
     assert "index=notable" in form["search"] and "_index_earliest=" in form["search"]
-    assert page.records == vendors.splunk_rows
+    assert "| head" not in form["search"]            # no cap inside the SPL
+    assert "sort 0 _indextime index _cd" in form["search"]
+    assert page.records == vendors.splunk_rows and page.window_complete
 
 
 @pytest.mark.parametrize("bad", ["main | delete", "a b", "x;y", "*) OR (index=secret"])

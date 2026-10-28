@@ -14,7 +14,44 @@ export const STATUS_LABELS = {
   throttled: "Throttled",
   temporarily_unavailable: "Temporarily unavailable",
   starting: "Starting",
+  degraded: "Degraded",
+  backlogged: "Backlogged",
 };
+
+function fmtAge(seconds) {
+  if (seconds == null) return "unknown";
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+}
+
+/** Acquisition, storage and correlation are separate stages; show each. */
+function progressLines(h) {
+  const lines = [];
+  for (const [name, st] of Object.entries(h.streams || {})) {
+    const where = st.window_complete
+      ? "window drained"
+      : `draining via ${(st.continuation_mode || "continuation").replace("_", " ")}`
+        + (st.snapshot_offset != null ? ` @${st.snapshot_offset}` : "");
+    lines.push(el("div", { class: "v2-meta" },
+      `${name}: ${where} · lag ${fmtAge(st.ingest_lag_seconds)}`
+      + (st.watermark ? ` · watermark ${fmtTime(st.watermark)}` : " · no watermark yet")));
+  }
+  const c = h.correlation;
+  if (c) {
+    lines.push(el("div", { class: "v2-meta" },
+      `Correlation queue: ${c.pending_correlation_items} pending`
+      + (c.oldest_pending_age_seconds != null ? ` (oldest ${fmtAge(c.oldest_pending_age_seconds)})` : "")
+      + (c.quarantined ? ` · ${c.quarantined} quarantined` : "")));
+  }
+  if (h.records_received != null) {
+    lines.push(el("div", { class: "v2-meta" },
+      `Received ${h.records_received} · new ${h.records_new} · updated ${h.records_updated}`
+      + ` · duplicate ${h.records_duplicate} · unchanged ${h.records_unchanged}`
+      + (h.provider_partial_errors ? ` · provider partial errors ${h.provider_partial_errors}` : "")));
+  }
+  return lines;
+}
 
 export const PROVIDER_BADGES = {
   elastic: "Elastic",
@@ -46,6 +83,16 @@ function card(conn, reload) {
   const h = conn.health || {};
   const status = conn.paused ? "paused" : (h.status || "not_configured");
   const actions = [];
+  if (conn.origin !== "legacy" && ["degraded", "temporarily_unavailable", "throttled", "backlogged"].includes(status)) {
+    actions.push(el("button", {
+      title: "Replay the saved cursor now instead of waiting out the backoff",
+      onclick: async (ev) => {
+        ev.target.disabled = true;
+        try { await v2Send(`/connections/${conn.connection_id}/retry`, "POST"); }
+        finally { setTimeout(reload, 800); }
+      },
+    }, "Retry now"));
+  }
   if (conn.origin === "managed") {
     actions.push(el("button", {
       onclick: async (ev) => {
@@ -64,9 +111,19 @@ function card(conn, reload) {
       `Last receipt: ${h.last_receipt ? fmtTime(h.last_receipt) : "—"} · `,
       `committed ${h.records_committed ?? 0}`,
       h.quarantined ? ` · quarantined ${h.quarantined}` : ""),
+    progressLines(h),
+    conn.settings && conn.settings.event_time_filter
+      ? el("div", { class: "v2-meta" },
+          conn.settings.event_time_floor_seconds
+            ? `Event-time filter: events older than ${fmtAge(conn.settings.event_time_floor_seconds)} at collection are excluded`
+            : "No event-time filter: full index-time collection (slower on large indexes)")
+      : null,
     h.last_error_code
       ? el("div", { class: "v2-meta v2-meta--err" }, `Last error: ${h.last_error_code}`) : null,
     (h.warnings || []).map((w) => el("div", { class: "v2-meta v2-meta--warn" }, w)),
+    conn.backfill ? el("div", { class: "v2-meta" },
+      `Backfill ${conn.backfill.state}: ${conn.backfill.pages} page(s), ${conn.backfill.stored} stored`
+      + (conn.backfill.error ? ` · ${conn.backfill.error}` : "")) : null,
     conn.status === "not_configured" || status === "not_configured"
       ? el("div", { class: "v2-meta" }, conn.prerequisites || "") : null,
     el("div", { class: "row" }, actions,

@@ -143,15 +143,48 @@ class Ledger:
                  link.get("cluster_id", ""), link.get("url"), link.get("title"),
                  link.get("status")),
             )
+        # Immutable snapshot of THIS revision: source_events only keeps the
+        # latest, and a queued older revision must keep its own input.
+        await conn.execute(
+            "INSERT OR IGNORE INTO source_event_revisions (canonical_event_id,"
+            " revision, raw_sha256, encrypted_payload, envelope_json, committed_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (env.canonical_event_id, revision, env.raw_sha256, blob,
+             json.dumps(env.as_dict(), default=str), now))
+        # Durable hand-off to correlation, committed with the evidence and the
+        # source cursor: a crash can never leave an acquired detection that
+        # nothing will ever correlate. Context, incident links and duplicate
+        # representations are stored but never queued as detections.
+        if duplicate_of:
+            obs_state = "duplicate"
+        elif not env.is_detection:
+            obs_state = "ingested"
+        elif row is not None:
+            # An updated alert: queued as a revision of the SAME finding, so
+            # it re-scores the chain but is never counted as a second alert.
+            obs_state = "queued_for_correlation"
+            await self._enqueue(conn, env, revision, "pending", now, "revise")
+        else:
+            obs_state = "queued_for_correlation"
+            await self._enqueue(conn, env, revision, "pending", now)
         await conn.execute(
             "INSERT OR IGNORE INTO processed_observations VALUES (?,?,?,?,?)",
-            (env.canonical_event_id, revision,
-             "duplicate" if duplicate_of else "accepted", duplicate_of, now),
+            (env.canonical_event_id, revision, obs_state, duplicate_of, now),
         )
         return AcceptedRecord(
             envelope=env, payload=item.payload,
             is_update=row is not None, duplicate_of=duplicate_of,
         )
+
+    @staticmethod
+    async def _enqueue(conn, env: SourceEnvelope, revision: int, state: str,
+                       now: str, operation: str = "correlate") -> None:
+        await conn.execute(
+            "INSERT OR IGNORE INTO ingest_work_items (canonical_event_id, revision,"
+            " operation, scope_id, connection_id, state, attempts, next_attempt_at,"
+            " created_at, processed_at) VALUES (?,?,?,?,?,?,0,?,?,?)",
+            (env.canonical_event_id, revision, operation, env.scope_id,
+             env.connection_id, state, now, now, None))
 
     async def _claim_aliases(self, env: SourceEnvelope, now: str) -> str | None:
         """Register aliases; return the canonical id of an earlier holder."""
@@ -221,6 +254,30 @@ class Ledger:
             out.append((env, payload))
         return out
 
+    async def list_revisions(self, canonical_event_id: str) -> list[dict[str, Any]]:
+        """Every stored revision of one source event (metadata only)."""
+        return await self._db.fetchall(
+            "SELECT revision, raw_sha256, committed_at, "
+            "encrypted_payload IS NOT NULL AS payload_kept "
+            "FROM source_event_revisions WHERE canonical_event_id=? "
+            "ORDER BY revision", (canonical_event_id,))
+
+    async def get_revision(self, canonical_event_id: str, revision: int,
+                           include_raw: bool = False) -> dict[str, Any] | None:
+        row = await self._db.fetchone(
+            "SELECT revision, raw_sha256, encrypted_payload, envelope_json, "
+            "committed_at FROM source_event_revisions "
+            "WHERE canonical_event_id=? AND revision=?",
+            (canonical_event_id, revision))
+        if row is None:
+            return None
+        blob = row.pop("encrypted_payload")
+        row["envelope"] = json.loads(row.pop("envelope_json"))
+        if include_raw and blob is not None:
+            row["raw"] = self._vault.open(
+                blob, f"ledger:{canonical_event_id}:{revision}", row["raw_sha256"])
+        return row
+
     async def context_for_principals(
         self, scope_id: str, principals: list[str], start_ms: int, end_ms: int,
         limit: int = 200,
@@ -240,14 +297,28 @@ class Ledger:
         return rows
 
     async def purge_raw_older_than(self, days: int) -> int:
-        """Retention: drop encrypted payloads, keep hashes and metadata."""
+        """Retention: drop encrypted payloads, keep hashes and metadata.
+
+        A payload that unresolved correlation work still needs is kept even
+        past the window - it may be the only copy of that revision.
+        """
+        cutoff = f"-{int(days)} days"
+        unresolved = (
+            "NOT EXISTS (SELECT 1 FROM ingest_work_items w WHERE "
+            "w.canonical_event_id={t}.canonical_event_id AND w.state IN "
+            "('pending','claimed','failed_retryable'))")
         async with self._db.transaction() as conn:
             cur = await conn.execute(
                 "UPDATE source_events SET raw_enc=NULL WHERE raw_enc IS NOT NULL "
-                "AND observed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)",
-                (f"-{int(days)} days",),
-            )
-        return cur.rowcount or 0
+                "AND observed_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AND "
+                + unresolved.format(t="source_events"), (cutoff,))
+            dropped = cur.rowcount or 0
+            await conn.execute(
+                "UPDATE source_event_revisions SET encrypted_payload=NULL WHERE "
+                "encrypted_payload IS NOT NULL AND committed_at < "
+                "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AND "
+                + unresolved.format(t="source_event_revisions"), (cutoff,))
+        return dropped
 
     async def record_error(
         self, connection_id: str, stream: str | None, code: str, detail: str,

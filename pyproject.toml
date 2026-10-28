@@ -1,6 +1,6 @@
 [project]
 name = "loglookup-ai"
-version = "2.0.0"
+version = "2.0.1"
 description = "LogLookup AI multi-SIEM investigation platform: Elastic, Sentinel, Splunk, Defender XDR and Entra ID ingestion, deterministic cross-source correlation, RAG grounded AI triage, approval-gated SOAR dispatch, and attack chain dashboard."
 readme = "README.md"
 license = { text = "Apache-2.0" }

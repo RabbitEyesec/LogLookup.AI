@@ -221,6 +221,78 @@ CREATE TABLE source_errors (
 );
 CREATE INDEX ix_source_errors_conn ON source_errors (connection_id, occurred_at);
 """),
+    (2, "reliability: revision snapshots and correlation work queue", """
+-- Immutable per-revision payload copies. source_events keeps only the latest
+-- revision, so a queued older revision would otherwise lose its only input.
+CREATE TABLE source_event_revisions (
+    canonical_event_id TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    raw_sha256  TEXT NOT NULL,
+    encrypted_payload BLOB,
+    envelope_json TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    PRIMARY KEY (canonical_event_id, revision)
+);
+
+-- Durable hand-off from the ledger to the correlation engine. A row is
+-- written in the same transaction as the evidence and the source cursor.
+CREATE TABLE ingest_work_items (
+    canonical_event_id TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    operation   TEXT NOT NULL,
+    scope_id    TEXT NOT NULL,
+    connection_id TEXT NOT NULL,
+    state       TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    lease_until TEXT,
+    last_error_code TEXT,
+    created_at  TEXT NOT NULL,
+    processed_at TEXT,
+    PRIMARY KEY (canonical_event_id, revision, operation)
+);
+CREATE INDEX ix_work_pending ON ingest_work_items (state, next_attempt_at);
+CREATE INDEX ix_work_conn ON ingest_work_items (connection_id, scope_id, state);
+
+-- Snapshot every revision already stored by v2.0.0 so the table is complete.
+INSERT INTO source_event_revisions (canonical_event_id, revision, raw_sha256,
+    encrypted_payload, envelope_json, committed_at)
+SELECT canonical_event_id, revision, raw_sha256, raw_enc, envelope_json, observed_at
+FROM source_events;
+"""),
+    (3, "cursor history, review flags, remote run status", """
+-- A cursor that an administrator replaced is kept, never overwritten.
+CREATE TABLE source_cursor_history (
+    history_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+    connection_id TEXT NOT NULL,
+    stream_name TEXT NOT NULL,
+    cursor_json TEXT NOT NULL,
+    replaced_by TEXT NOT NULL,
+    reason      TEXT NOT NULL,
+    replaced_at TEXT NOT NULL
+);
+
+-- An alert revision the engine could not apply deterministically.
+CREATE TABLE investigation_review_flags (
+    flag_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    cluster_id  TEXT NOT NULL,
+    canonical_event_id TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    reason      TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    resolved_at TEXT,
+    resolved_by TEXT
+);
+CREATE INDEX ix_review_open ON investigation_review_flags (cluster_id, resolved_at);
+
+-- What Azure last said about the workflow run, kept apart from LogLookup's
+-- own action state and from any confirmed downstream effect.
+ALTER TABLE response_actions ADD COLUMN remote_status TEXT;
+ALTER TABLE response_actions ADD COLUMN remote_status_at TEXT;
+ALTER TABLE response_actions ADD COLUMN remote_run_json TEXT;
+ALTER TABLE response_actions ADD COLUMN downstream_effect TEXT NOT NULL DEFAULT 'not_observed';
+"""),
 ]
 
 LATEST_VERSION = MIGRATIONS[-1][0]

@@ -14,8 +14,8 @@ from tests.v2_helpers import DEFENDER_SRC, SENTINEL_SRC, MockVendors, build_runt
 CSRF = {"x-loglookup-client": "1"}
 
 
-async def make_api(tmp_path, sources=None, transport=None):
-    vendors = MockVendors()
+async def make_api(tmp_path, sources=None, transport=None, vendors=None):
+    vendors = vendors or MockVendors()
     rt = await build_runtime(tmp_path, sources if sources is not None
                              else [SENTINEL_SRC, DEFENDER_SRC], vendors, **LA)
     rt.dispatcher._transport = transport or FakeTransport()

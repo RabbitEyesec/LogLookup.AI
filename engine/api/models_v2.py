@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -60,5 +61,31 @@ class ActionDecision(_Strict):
 
 class ReconcileRequest(_Strict):
     outcome: str
+    #: what a person verified downstream (separate from the workflow status)
+    downstream_effect: Optional[str] = None
     run_id: Optional[str] = Field(default=None, max_length=200)
     note: str = Field(default="", max_length=1000)
+
+
+class BackfillRequest(_Strict):
+    """Explicit, bounded re-read of one stream. Never touches the live cursor."""
+
+    stream: str = Field(min_length=1, max_length=64)
+    start: datetime
+    end: datetime
+    reason: str = Field(default="", max_length=500)
+    #: Splunk only: event-time floor for this backfill in seconds, 0 = none
+    event_time_floor_seconds: Optional[int] = Field(default=None, ge=0, le=31536000)
+
+
+class CursorDecision(_Strict):
+    """Administrator confirms a new scan after a query-defining change."""
+
+    stream: str = Field(min_length=1, max_length=64)
+    #: where the new scan starts (default: now); at most 7 days back
+    start_from: Optional[datetime] = None
+    reason: str = Field(min_length=5, max_length=500)
+
+
+class RecoveryRequest(_Strict):
+    reason: str = Field(min_length=5, max_length=500)

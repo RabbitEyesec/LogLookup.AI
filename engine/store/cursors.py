@@ -34,6 +34,26 @@ class CursorStore:
             for r in rows
         }
 
+    async def replace(self, connection_id: str, stream: str, new_cursor: dict[str, Any],
+                      who: str, reason: str, audit) -> dict[str, Any] | None:
+        """Swap in a new cursor. The old one is kept in ``source_cursor_history``
+        and the audit entry is written in the same transaction."""
+        old = await self.get(connection_id, stream)
+        async with self._db.transaction() as conn:
+            if old is not None:
+                await conn.execute(
+                    "INSERT INTO source_cursor_history (connection_id, stream_name,"
+                    " cursor_json, replaced_by, reason, replaced_at) VALUES (?,?,?,?,?,?)",
+                    (connection_id, stream, json.dumps(old), who, reason, utcnow()))
+            await conn.execute(
+                upsert_cursor_sql(),
+                (connection_id, stream, json.dumps(new_cursor), 1, utcnow()))
+            await audit.append(
+                who, "connection.cursor_confirmed", connection_id,
+                {"stream": stream, "reason": reason, "old_cursor": old,
+                 "new_cursor": new_cursor}, commit=False)
+        return old
+
     async def reset(self, connection_id: str, stream: str | None = None) -> None:
         if stream is None:
             await self._db.execute(

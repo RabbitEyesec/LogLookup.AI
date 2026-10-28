@@ -77,7 +77,7 @@ Every existing contract is preserved: OCSF Detection Findings, `CHAIN-YYYY-MM-DD
 
 **Multi-source investigations**
 
-- **Connectors** for Elastic Security, Microsoft Sentinel (versioned KQL templates), Splunk Enterprise / ES (v2 export and job search on `_indextime`), Microsoft Defender XDR (Graph Security alerts and incidents) and Microsoft Entra ID (sign-ins, directory audits).
+- **Connectors** for Elastic Security, Microsoft Sentinel (versioned KQL templates), Splunk Enterprise / ES (snapshot search jobs on `_indextime`), Microsoft Defender XDR (Graph Security alerts and incidents) and Microsoft Entra ID (sign-ins, directory audits).
 - **Connection registry**: any number of workspaces, clusters and tenants, each with its own scope, cursor, health state and encrypted credential. Add, pause, resume and rotate credentials from the UI without a restart.
 - **Honest source states**: healthy, paused, not configured, permission denied, limited by licence, throttled, temporarily unavailable - each visually distinct.
 
@@ -104,6 +104,19 @@ Every existing contract is preserved: OCSF Detection Findings, `CHAIN-YYYY-MM-DD
 - `/api/v2` for connections, investigations, evidence, timeline, graph, links, notes, assignment, actions, audit and metrics, with server-side roles (`viewer`, `analyst`, `responder`, `administrator`), revision checks and write-only credentials.
 - Hardened systemd unit, `loglookup token` and `loglookup snapshot` commands, versioned schema migrations.
 - Backward compatible: the existing single-Elastic configuration keeps working and appears as the `elastic-default` connection.
+
+**v2.0.1 - reliability patch**
+
+- Lossless Sentinel paging on a total `(TimeGenerated, SystemAlertId)` order, and Splunk snapshot search jobs paged by `sid` + `offset`; truncated, partial or unkeyed provider results stop the page instead of being skipped.
+- A durable ledger-to-correlation queue: acquired detections can no longer be lost between the cursor commit and the correlator, and restarts drain the backlog without double counting.
+- Atomic response settlement and crash recovery that repairs the outbox without ever resending an ambiguous action.
+- Truthful health: committed-watermark lag, per-stream progress, `degraded` and `backlogged` states, correlation queue depth, and a bounded, audited administrator backfill.
+
+**Next - revisions and remote status** (unreleased)
+
+- Updated vendor alerts re-score their chain in place: same alert count, recomputed risk and ATT&CK progression, a new investigation revision only on a material change, review flags when a change can't be applied deterministically, stale AI analyses marked, and pending response proposals re-checked.
+- A read-only Azure Logic Apps run-status lookup (Consumption and Standard) with a **Check remote status** action: exact matching, Azure's status kept apart from LogLookup's state and from the downstream effect.
+- Operating decisions made explicit: fail-closed bad rows with administrator recovery, a blocking (not silent) cursor reset when query settings change, and a visible Splunk event-time floor.
 
 Full notes: [CHANGELOG.md](CHANGELOG.md) - upgrade steps: [docs/v2/migration.md](docs/v2/migration.md).
 
@@ -223,10 +236,10 @@ Existing routes are unchanged. New in v2 (all under `/api/v2`):
 
 | Area | Routes |
 |---|---|
-| Connections | `GET/POST /connections`, `GET/PATCH /connections/{id}`, `POST /connections/{id}/pause`, `/resume`, `GET /sources/health` |
-| Investigations | `GET /investigations`, `/investigations/{id}`, `/evidence`, `/timeline`, `/graph`, `/external-links`, `/actions` |
+| Connections | `GET/POST /connections`, `GET/PATCH /connections/{id}`, `POST /connections/{id}/pause`, `/resume`, `POST/GET /connections/{id}/backfill`, `POST /connections/{id}/retry`, `/skip-bad-rows`, `/cursor/confirm`, `GET /sources/health` |
+| Investigations | `GET /investigations`, `/investigations/{id}`, `/evidence`, `/evidence/{event}/revisions/{n}`, `/revisions`, `/review-flags`, `/timeline`, `/graph`, `/external-links`, `/actions` |
 | Analyst records | `POST /investigations/{id}/notes`, `/assign` |
-| Response | `GET /response/workflows`, `POST /investigations/{id}/actions`, `POST /actions/{id}/approve`, `/reject`, `/cancel`, `/reconcile`, `GET /actions/{id}` |
+| Response | `GET /response/workflows`, `POST /investigations/{id}/actions`, `POST /actions/{id}/approve`, `/reject`, `/cancel`, `/reconcile`, `/check-status`, `GET /actions/{id}` |
 | Operations | `GET /audit`, `/audit/verify`, `/metrics` |
 
 Mutations carry the investigation revision they acted on (`409` when stale), roles are enforced server-side (`403`), and dependent-service outages return `503`. Interactive docs at `/api/docs`.

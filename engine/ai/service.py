@@ -15,6 +15,8 @@ correlation result — never an invented verdict.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from typing import Any, Callable, Optional
 
@@ -120,7 +122,27 @@ class TriageService:
             return True
         return cluster.surfaced
 
-    def _fingerprint(self, cluster: Cluster) -> tuple:
+    @staticmethod
+    def _stamp(engine: CorrelationEngine, cluster: Cluster) -> str:
+        """Fingerprint of the evidence an analysis would be based on.
+        It changes when an alert is revised in a way that matters (severity,
+        title, ATT&CK, host, user, process, time) and not otherwise."""
+        parts = []
+        for a in engine.alerts_of(cluster):
+            device = a.device.hostname if a.device else ""
+            user = a.actor.user.name if a.actor and a.actor.user else ""
+            proc = a.actor.process if a.actor else None
+            attacks = sorted(
+                (x.tactic.name if x.tactic else "",
+                 x.technique.uid if x.technique else "")
+                for x in a.finding_info.attacks)
+            parts.append([a.uid, a.time, a.severity_id, a.finding_info.title,
+                          device, user, proc.name if proc else "",
+                          proc.cmd_line if proc else "", attacks])
+        return hashlib.sha256(
+            json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:20]
+
+    def _fingerprint(self, cluster: Cluster, stamp: str = "") -> tuple:
         """Chain state relevant to triage: alert set + provider identity.
 
         A chain is re-processed when it gains alerts (or the surfaced flag
@@ -131,6 +153,7 @@ class TriageService:
             tuple(cluster.alert_uids),
             cluster.surfaced,
             self.providers.current.model_id if self._ai_enabled else "",
+            stamp,
         )
 
     async def process_cluster(
@@ -141,7 +164,8 @@ class TriageService:
         force: bool = False,
     ) -> dict[str, Any]:
         """Triage + report + write back one chain; returns its document."""
-        fingerprint = self._fingerprint(cluster)
+        stamp = self._stamp(engine, cluster)
+        fingerprint = self._fingerprint(cluster, stamp)
         if not force:
             existing = self._results.get(cluster.cluster_id)
             if (
@@ -156,6 +180,11 @@ class TriageService:
                 status = await self.providers.current.health()
                 if status.reachable is False:
                     return existing
+        existing = self._results.get(cluster.cluster_id)
+        if (not force and existing is not None and existing.get("triage")
+                and existing.get("evidence_stamp") not in (None, stamp)):
+            return await self._mark_stale(engine, cluster, existing, stamp,
+                                          fingerprint)
         summary = engine.cluster_summary(cluster)
         context: dict[str, Any] = {}
         if self.context_provider is not None:
@@ -198,6 +227,34 @@ class TriageService:
             triage_status=triage_status,
             triage_error=triage_error,
         )
+        doc["evidence_stamp"] = stamp
+        self._store_result(cluster.cluster_id, doc, fingerprint)
+        if self._writer is not None:
+            await self._writer.write(doc)
+        return doc
+
+    async def _mark_stale(self, engine: CorrelationEngine, cluster: Cluster,
+                          existing: dict[str, Any], stamp: str,
+                          fingerprint: tuple) -> dict[str, Any]:
+        """The evidence changed after an AI analysis was written.
+
+        The chain facts (risk, timeline) are refreshed, the earlier analysis
+        is kept but clearly marked stale, and no new analysis is requested
+        automatically - a person re-runs it.
+        """
+        summary = engine.cluster_summary(cluster)
+        doc = build_writeback_doc(
+            summary, None, self._config.output,
+            report_markdown=existing.get("report_markdown", ""),
+            triage_status=existing.get("triage_status"))
+        doc["triage"] = existing["triage"]
+        doc["triage_status"] = existing.get("triage_status")
+        doc["triage_stale"] = True
+        doc["triage_stale_reason"] = (
+            "The evidence changed after this analysis (an alert was revised). "
+            "Re-run triage to refresh it.")
+        doc["evidence_stamp"] = existing.get("evidence_stamp")  # what it analysed
+        doc["current_evidence_stamp"] = stamp
         self._store_result(cluster.cluster_id, doc, fingerprint)
         if self._writer is not None:
             await self._writer.write(doc)

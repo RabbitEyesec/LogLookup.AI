@@ -106,8 +106,12 @@ class GraphPagedConnector:
             return PageResult(
                 records,
                 {"continue": True, "page_start": iso_z(start),
-                 "window_end": iso_z(end), "next_link": nxt}, False, [])
-        return PageResult(records, {"window_end": iso_z(end)}, True, [])
+                 "window_end": iso_z(end), "next_link": nxt,
+                 **({"watermark": cursor["watermark"]}
+                    if cursor and cursor.get("watermark") else {})},
+                False, ["PAGE_LIMIT_REACHED"])
+        return PageResult(records, {"window_end": iso_z(end),
+                                    "watermark": iso_z(end)}, True, [])
 
 
 class DefenderXdrConnector(GraphPagedConnector):

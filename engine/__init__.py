@@ -7,4 +7,4 @@ AI reasoning, RAG, write-back, and UI belong to later phases and are not
 part of this package yet.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"

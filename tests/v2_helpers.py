@@ -72,6 +72,8 @@ class MockVendors:
         self.signins: list[dict] = [SIGNIN]
         self.audits: list[dict] = []
         self.splunk_rows: list[dict] = []
+        self.splunk_jobs: dict[str, list[dict]] = {}
+        self.splunk_jobs_created = 0
         self.requests: list[httpx.Request] = []
         self.fail_next: dict[str, int] = {}
 
@@ -100,10 +102,25 @@ class MockVendors:
         if host == "splunk.example.invalid":
             if path.endswith("/server/info"):
                 return httpx.Response(200, json={"entry": []})
-            if path.endswith("/search/v2/jobs/export"):
-                body = "\n".join(json.dumps({"preview": False, "result": r})
-                                 for r in self.splunk_rows)
-                return httpx.Response(200, text=body)
+            if path.endswith("/search/v2/jobs") and request.method == "POST":
+                self.splunk_jobs_created += 1
+                sid = f"sid{self.splunk_jobs_created}"
+                self.splunk_jobs[sid] = list(self.splunk_rows)
+                return httpx.Response(201, json={"sid": sid})
+            if "/search/v2/jobs/" in path:
+                sid = path.rsplit("/search/v2/jobs/", 1)[1].split("/")[0]
+                if request.method == "DELETE":
+                    self.splunk_jobs.pop(sid, None)
+                    return httpx.Response(200, json={})
+                if sid not in self.splunk_jobs:
+                    return httpx.Response(404, text="unknown sid")
+                rows = self.splunk_jobs[sid]
+                if path.endswith("/results"):
+                    off = int(request.url.params.get("offset", 0))
+                    cnt = int(request.url.params.get("count", 100))
+                    return httpx.Response(200, json={"results": rows[off:off + cnt]})
+                return httpx.Response(200, json={"entry": [{"content": {
+                    "isDone": True, "isFailed": False, "resultCount": len(rows)}}]})
         return httpx.Response(404, text="unmocked " + url)
 
 
@@ -132,7 +149,7 @@ DEFENDER_SRC = source("defender-xdr", "defender_xdr", {"tenant_id": TENANT})
 ENTRA_SRC = source("entra-id", "entra_id", {"tenant_id": TENANT})
 SPLUNK_SRC = source("splunk-es", "splunk", {
     "management_url": "https://splunk.example.invalid:8089",
-    "indexes": ["notable"], "search_mode": "export"})
+    "indexes": ["notable"], "search_mode": "jobs"})
 
 
 async def build_runtime(tmp_path: Path, sources: list[dict], vendors: MockVendors,
@@ -170,3 +187,5 @@ async def settle(rt: V2Runtime, expected_events: int, timeout=6.0):
         row = await rt.db.fetchone("SELECT COUNT(*) AS n FROM source_events")
         return row["n"] >= expected_events
     assert await wait_for(enough, timeout), "sources did not deliver in time"
+    # Correlation is a durable, asynchronous stage now: let it catch up.
+    await rt.drain_work()

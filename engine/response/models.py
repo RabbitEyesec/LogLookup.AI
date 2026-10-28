@@ -97,6 +97,12 @@ class ResponseAction:
     transitions: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
+    #: last thing Azure said about the workflow run (not our own state)
+    remote_status: str | None = None
+    remote_status_at: str | None = None
+    remote_run: dict[str, Any] | None = None
+    #: only ever set by a person: not_observed | confirmed_effect | confirmed_no_effect
+    downstream_effect: str = "not_observed"
 
     def view(self) -> dict[str, Any]:
         return {
@@ -111,11 +117,15 @@ class ResponseAction:
             "last_remote_observation": self.last_remote_observation,
             "expires_at": self.expires_at, "transitions": self.transitions,
             "created_at": self.created_at, "updated_at": self.updated_at,
+            "remote_status": self.remote_status,
+            "remote_status_at": self.remote_status_at,
+            "remote_run": self.remote_run,
             # three distinct layers, never conflated
             "status_layers": {
                 "loglookup_dispatch": self.state.value,
-                "workflow_run": ("run_reference_recorded" if self.provider_run_id
-                                 else "unknown"),
-                "downstream_effect": "not_observed",
+                "workflow_run": (self.remote_status
+                                 or ("run_reference_recorded" if self.provider_run_id
+                                     else "unknown")),
+                "downstream_effect": self.downstream_effect,
             },
         }

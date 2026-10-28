@@ -72,6 +72,9 @@ class LogicAppsTransport:
             "Content-Type": "application/json",
             "Idempotency-Key": contract["idempotency_key"],
             "X-LogLookup-Action-Id": contract["action_id"],
+            # Logic Apps stores this on the run, which is how a run is found
+            # again later without guessing from time or workflow name.
+            "x-ms-client-tracking-id": contract["action_id"],
         }
         if self._auth == "entra":
             try:
@@ -88,8 +91,7 @@ class LogicAppsTransport:
         except httpx.HTTPError as exc:
             return DispatchResult("unknown",
                                   detail=f"delivery unknown: {type(exc).__name__}")
-        run_id = (response.headers.get("x-ms-workflow-run-id")
-                  or response.headers.get("x-ms-client-tracking-id"))
+        run_id = response.headers.get("x-ms-workflow-run-id")
         code = response.status_code
         if 200 <= code < 300:
             return DispatchResult("accepted", run_id=run_id,

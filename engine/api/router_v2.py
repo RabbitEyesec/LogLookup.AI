@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -19,8 +20,9 @@ from fastapi.responses import JSONResponse
 from engine.api import views
 from engine.api.auth import Principal, authenticate, require
 from engine.api.models_v2 import (
-    ActionCreate, ActionDecision, AssignRequest, ConnectionCreate,
-    ConnectionPatch, NoteCreate, ReconcileRequest,
+    ActionCreate, ActionDecision, AssignRequest, BackfillRequest,
+    ConnectionCreate, ConnectionPatch, CursorDecision, NoteCreate,
+    ReconcileRequest, RecoveryRequest,
 )
 from engine.connectors.base import ConfigurationError, SourceConnection
 from engine.connectors.registry import REGISTRY, build_connector
@@ -254,6 +256,144 @@ async def resume_connection(connection_id: str, request: Request,
     return await _set_pause(request, connection_id, p, False)
 
 
+MAX_BACKFILL_SPAN = timedelta(days=7)
+
+
+@router.post("/connections/{connection_id}/backfill", status_code=202)
+async def start_backfill(connection_id: str, body: BackfillRequest,
+                         request: Request, p: Principal = Depends(_principal)):
+    """Re-read an explicit UTC interval of one stream (administrator only).
+
+    The source must be paused: the live worker and a backfill must never run
+    together. Pages are stored through the ledger (de-duplicated) but the
+    live checkpoint is never written, so it cannot move backwards.
+    """
+    require(p, "administrator")
+    rt = _rt(request)
+    found = await rt.repo.get(connection_id)
+    if not found:
+        raise HTTPException(404, "unknown connection")
+    conn, paused = found
+    if conn.origin == "legacy":
+        raise HTTPException(409, "the legacy Elastic poller cannot be backfilled; "
+                                 "add the cluster as a managed connection")
+    if not paused:
+        raise HTTPException(409, "pause the connection before a backfill")
+    if not conn.active:
+        raise HTTPException(409, "the connection is not enabled")
+    start, end = _utc(body.start), _utc(body.end)
+    if end <= start:
+        raise HTTPException(422, "end must be after start")
+    if end - start > MAX_BACKFILL_SPAN:
+        raise HTTPException(422, "a backfill is limited to 7 days; run several")
+    if end > datetime.now(timezone.utc):
+        raise HTTPException(422, "end must not be in the future")
+    running = rt.supervisor.backfill_tasks.get(connection_id)
+    if running is not None and not running.done():
+        raise HTTPException(409, "a backfill is already running for this connection")
+    await rt.audit.append(p.username, "connection.backfill", connection_id, {
+        "stream": body.stream, "start": start.isoformat(), "end": end.isoformat(),
+        "reason": body.reason,
+        "event_time_floor_seconds": body.event_time_floor_seconds})
+    rt.supervisor.start_backfill(conn, body.stream, start, end,
+                                 body.event_time_floor_seconds)
+    return {"state": "running", "stream": body.stream,
+            "start": start.isoformat(), "end": end.isoformat()}
+
+
+@router.get("/connections/{connection_id}/backfill")
+async def backfill_status(connection_id: str, request: Request,
+                          p: Principal = Depends(_principal)):
+    require(p, "administrator")
+    rt = _rt(request)
+    status = rt.supervisor.backfills.get(connection_id)
+    if status is None:
+        raise HTTPException(404, "no backfill has run for this connection")
+    return status
+
+
+@router.post("/connections/{connection_id}/retry")
+async def retry_connection(connection_id: str, request: Request,
+                           p: Principal = Depends(_principal)):
+    """Administrator: replay the saved cursor now instead of waiting out the
+    backoff (for example after fixing a permission). Nothing is skipped."""
+    require(p, "administrator")
+    rt = _rt(request)
+    worker = rt.supervisor.workers.get(connection_id)
+    if worker is None or worker.conn.origin == "legacy":
+        raise HTTPException(404, "no managed worker for this connection")
+    worker.retry_now()
+    await rt.audit.append(p.username, "connection.retry", connection_id, {})
+    return {"state": "retry_requested"}
+
+
+@router.post("/connections/{connection_id}/skip-bad-rows")
+async def skip_bad_rows(connection_id: str, body: RecoveryRequest, request: Request,
+                        p: Principal = Depends(_principal)):
+    """Administrator: let ONE window set unidentifiable rows aside (each is
+    hashed and recorded) so a source stuck on a bad row can move on. Strict
+    mode returns automatically once that window drains."""
+    require(p, "administrator")
+    rt = _rt(request)
+    worker = rt.supervisor.workers.get(connection_id)
+    if worker is None or worker.conn.origin == "legacy":
+        raise HTTPException(404, "no managed worker for this connection")
+    worker.allow_bad_rows_once()
+    await rt.audit.append(p.username, "connection.skip_bad_rows", connection_id,
+                          {"reason": body.reason})
+    return {"state": "tolerating_bad_rows_for_one_window"}
+
+
+@router.post("/connections/{connection_id}/cursor/confirm")
+async def confirm_new_scan(connection_id: str, body: CursorDecision, request: Request,
+                           p: Principal = Depends(_principal)):
+    """Administrator: after a workspace / index / query change blocked the
+    saved cursor (``CURSOR_CONFIG_CHANGED``), confirm a new scan. The old
+    cursor is kept in history and the decision is audited. To re-read a past
+    interval instead, use a bounded backfill."""
+    require(p, "administrator")
+    rt = _rt(request)
+    found = await rt.repo.get(connection_id)
+    if not found:
+        raise HTTPException(404, "unknown connection")
+    conn, paused = found
+    if not paused:
+        raise HTTPException(409, "pause the connection before confirming a new scan")
+    try:
+        connector = rt._make_connector(conn)
+    except ConfigurationError as exc:
+        raise HTTPException(422, str(exc)) from None
+    try:
+        new_fp = getattr(connector, "fingerprint", None)
+        if new_fp is None:
+            raise HTTPException(409, "this provider does not use fingerprinted cursors")
+        old = await rt.cursors.get(connection_id, body.stream)
+        if old is None:
+            raise HTTPException(409, "there is no saved cursor to replace")
+        if old.get("cursor_version") == 2 and old.get("fingerprint") == new_fp:
+            raise HTTPException(409, "the saved cursor already matches the current settings")
+        now = datetime.now(timezone.utc)
+        start = _utc(body.start_from) if body.start_from else now
+        if start > now or now - start > MAX_BACKFILL_SPAN:
+            raise HTTPException(422, "start_from must be within the last 7 days")
+        kind = {"sentinel": "sentinel_kql", "splunk": "splunk_job"}[conn.provider]
+        new_cursor = {"cursor_version": 2, "kind": kind, "fingerprint": new_fp,
+                      "window_end": start.isoformat().replace("+00:00", "Z"),
+                      "continue": False, "confirmed_by": p.username}
+        await rt.cursors.replace(connection_id, body.stream, new_cursor,
+                                 p.username, body.reason, rt.audit)
+        await connector.discard_cursor(old)  # release any snapshot it was holding
+    finally:
+        await connector.close()
+    return {"state": "new_scan_confirmed", "start_from": new_cursor["window_end"]}
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        raise HTTPException(422, "timestamps must include a UTC offset")
+    return value.astimezone(timezone.utc)
+
+
 @router.get("/sources/health")
 async def sources_health(request: Request, p: Principal = Depends(_principal)):
     require(p, "viewer")
@@ -288,6 +428,9 @@ async def list_investigations(request: Request, provider: str | None = None,
             "sources": sources, "source_diversity": len(
                 {s["provider"] for s in sources}),
             "alert_count": (doc or {}).get("chain", {}).get("alert_count"),
+            "ai_stale": bool((doc or {}).get("triage_stale")),
+            "review_open": (await rt.investigations.open_flag_counts()).get(
+                row["cluster_id"], 0),
             "title": brief.get("incident_title"),
             "severity": brief.get("max_severity"),
         })
@@ -314,6 +457,10 @@ async def get_investigation(cluster_id: str, request: Request,
         "identity_context": context,
         "notes": await rt.investigations.notes(resolved),
         "evidence_refs": _evidence_refs(doc),
+        # an analysis written before an alert was revised is shown as stale
+        "ai_stale": bool(doc.get("triage_stale")),
+        "ai_stale_reason": doc.get("triage_stale_reason"),
+        "review_flags": await rt.investigations.review_flags(resolved),
     }
 
 
@@ -342,11 +489,69 @@ async def investigation_evidence(cluster_id: str, request: Request,
     for ceid in page:
         ev = await rt.ledger.get_event(ceid, include_raw=include_raw)
         if ev is not None and ev["scope_id"] == p.scope_id:
+            # earlier versions stay reachable; only metadata is listed here
+            ev["revisions"] = await rt.ledger.list_revisions(ceid)
             events.append(ev)
     if include_raw:
         await rt.audit.append(p.username, "evidence.raw_read", resolved,
                               {"events": [e["canonical_event_id"] for e in events]})
     return {"cluster_id": resolved, "total": len(ids), "events": events}
+
+
+@router.get("/investigations/{cluster_id}/evidence/{canonical_event_id}/revisions/{revision}")
+async def evidence_revision(cluster_id: str, canonical_event_id: str, revision: int,
+                            request: Request, include_raw: bool = False,
+                            p: Principal = Depends(_principal)):
+    """One earlier version of a source record (the raw payload is analyst-only
+    and audited, like any raw read)."""
+    require(p, "analyst" if include_raw else "viewer")
+    rt = _rt(request)
+    resolved, _doc = await _document(request, cluster_id)
+    if canonical_event_id not in await rt.investigations.event_ids(resolved):
+        raise HTTPException(404, "that record is not part of this investigation")
+    found = await rt.ledger.get_revision(canonical_event_id, revision, include_raw)
+    if found is None:
+        raise HTTPException(404, "no such revision")
+    if include_raw:
+        await rt.audit.append(p.username, "evidence.raw_read", resolved,
+                              {"events": [canonical_event_id], "revision": revision})
+    return found
+
+
+@router.get("/investigations/{cluster_id}/revisions")
+async def investigation_revisions(cluster_id: str, request: Request,
+                                  p: Principal = Depends(_principal)):
+    """Every saved revision of the investigation: scores, what triggered it,
+    and the source revision each alert was scored from."""
+    require(p, "viewer")
+    rt = _rt(request)
+    resolved, _doc = await _document(request, cluster_id)
+    return {"cluster_id": resolved,
+            "revisions": await rt.investigations.revisions(resolved)}
+
+
+@router.get("/investigations/{cluster_id}/review-flags")
+async def review_flags(cluster_id: str, request: Request,
+                       include_resolved: bool = False,
+                       p: Principal = Depends(_principal)):
+    require(p, "viewer")
+    rt = _rt(request)
+    resolved, _doc = await _document(request, cluster_id)
+    return {"cluster_id": resolved,
+            "flags": await rt.investigations.review_flags(resolved, include_resolved)}
+
+
+@router.post("/investigations/{cluster_id}/review-flags/{flag_id}/resolve")
+async def resolve_review_flag(cluster_id: str, flag_id: int, request: Request,
+                              p: Principal = Depends(_principal)):
+    require(p, "analyst")
+    rt = _rt(request)
+    resolved, _doc = await _document(request, cluster_id)
+    if not await rt.investigations.resolve_flag(flag_id, p.username):
+        raise HTTPException(404, "no open flag with that id")
+    await rt.audit.append(p.username, "investigation.review_resolved", resolved,
+                          {"flag_id": flag_id})
+    return {"flag_id": flag_id, "resolved_by": p.username}
 
 
 @router.get("/investigations/{cluster_id}/timeline")
@@ -495,7 +700,16 @@ async def reconcile_action(action_id: str, body: ReconcileRequest, request: Requ
     rt = _rt(request)
     return (await rt.reconciler.resolve(
         p.username, p.role, action_id, body.outcome, run_id=body.run_id,
-        note=body.note)).view()
+        note=body.note, downstream_effect=body.downstream_effect)).view()
+
+
+@router.post("/actions/{action_id}/check-status")
+async def check_remote_status(action_id: str, request: Request,
+                              p: Principal = Depends(_principal)):
+    """Responder: ask Azure for the workflow run's status (read-only; the
+    original request is never sent again)."""
+    rt = _rt(request)
+    return (await rt.run_status.check(p.username, p.role, action_id)).view()
 
 
 @router.get("/actions/{action_id}")

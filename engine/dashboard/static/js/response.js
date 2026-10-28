@@ -34,7 +34,11 @@ function actionCard(a, reload) {
       btn("Mark delivered", `/actions/${a.action_id}/reconcile`, { outcome: "delivered" }),
       btn("Mark not delivered", `/actions/${a.action_id}/reconcile`, { outcome: "not_delivered" }));
   }
+  if (a.state === "acknowledged" || a.state === "reconciliation_required") {
+    buttons.push(btn("Check remote status", `/actions/${a.action_id}/check-status`));
+  }
   const layers = a.status_layers || {};
+  const run = a.remote_run || {};
   return el("div", { class: `v2-card v2-action v2-action--${a.state}` },
     el("div", { class: "v2-card-head" }, el("strong", {}, a.workflow_id),
       el("span", { class: `v2-status v2-status--${a.state}` }, a.state.replaceAll("_", " "))),
@@ -44,6 +48,17 @@ function actionCard(a, reload) {
     el("div", { class: "v2-meta" },
       `Dispatch: ${layers.loglookup_dispatch} · Workflow run: ${layers.workflow_run} · Downstream effect: ${layers.downstream_effect}`),
     a.provider_run_id ? el("div", { class: "v2-meta" }, `Run reference: ${a.provider_run_id}`) : null,
+    a.remote_status
+      ? el("div", { class: "v2-meta" },
+          `Azure workflow status: ${a.remote_status}`
+          + (run.reason && run.reason !== "ok" ? ` (${run.reason.replace("_", " ")})` : "")
+          + (a.remote_status_at ? ` · checked ${a.remote_status_at}` : ""))
+      : null,
+    run.error_code ? el("div", { class: "v2-meta v2-meta--warn" },
+      `Run error: ${run.error_code}${run.error_message ? " - " + run.error_message : ""}`) : null,
+    a.remote_status && a.remote_status !== "unresolved"
+      ? el("div", { class: "v2-meta" },
+          "A workflow status is not proof of what the workflow did downstream.") : null,
     el("div", { class: "row" }, buttons));
 }
 

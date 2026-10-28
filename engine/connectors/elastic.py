@@ -346,23 +346,31 @@ class ElasticSourceConnector:
         await self._connector.aclose()
 
     async def fetch_page(self, cursor, stream="alerts"):
-        from engine.connectors.base import PageResult
+        from engine.connectors.base import PAGE_LIMIT_REACHED, PageResult
+        from engine.normalize.timeutil import ms_to_iso
 
         now_ms = int(self._clock() * 1000)
+        backfill = bool(cursor and cursor.get("backfill"))
         since = (int(cursor["since_ms"]) if cursor and "since_ms" in cursor
                  else now_ms - self._conn.lookback_seconds * 1000)
+        # A backfill carries its own upper bound; live polling reads to now.
+        until = int(cursor["until_ms"]) if backfill else now_ms + 1
         limit = self._conn.max_page_size
         hits: list[dict[str, Any]] = []
-        async for hit in self._connector.fetch_batch(since, now_ms + 1):
+        async for hit in self._connector.fetch_batch(since, until):
             hits.append(hit)
             if len(hits) >= limit:
                 break
         if len(hits) >= limit:
             last = int((hits[-1].get("sort") or [since])[0])
             nxt = last if last > since else since + 1
-            return PageResult(hits, {"since_ms": nxt}, False, [])
-        return PageResult(hits, {"since_ms": max(
-            since, now_ms - self._conn.lookback_seconds * 1000)}, True, [])
+            nxt_cursor = {"since_ms": nxt, "watermark": ms_to_iso(since)}
+            if backfill:
+                nxt_cursor.update(backfill=True, until_ms=until)
+            return PageResult(hits, nxt_cursor, False, [PAGE_LIMIT_REACHED])
+        resume = max(since, now_ms - self._conn.lookback_seconds * 1000)
+        return PageResult(hits, {"since_ms": resume,
+                                 "watermark": ms_to_iso(resume)}, True, [])
 
     def identify(self, record, stream):
         from engine.connectors.base import RecordIdentity

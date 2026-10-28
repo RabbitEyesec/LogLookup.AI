@@ -34,7 +34,7 @@ from typing import Any, Optional
 
 from engine.config import Config, load_config
 from engine.connectors.elastic import ElasticConnector
-from engine.correlate.engine import Cluster, CorrelationEngine
+from engine.correlate.engine import Cluster, CorrelationEngine, Revision
 from engine.ingest import (
     RawRecord,
     iter_elastic_batch,
@@ -58,6 +58,7 @@ class PipelineResult:
     parse_flagged: int = 0
     suppressed: int = 0
     correlated: int = 0
+    revised: int = 0
     clusters: list[Cluster] = field(default_factory=list)
 
     @property
@@ -73,12 +74,21 @@ class Pipeline:
         self._file_adapter = get_adapter("file")
         self._siem_adapter = get_adapter(config.siem.type)
         self._source_adapters: dict[str, Any] = {}
+        #: canonical ids already taken in. A consumer that crashed after
+        #: processing but before acknowledging, or a restart that replays
+        #: history and then meets the same queued item, must not count the
+        #: detection twice. Insertion-ordered and bounded.
+        self._seen_events: dict[str, None] = {}
         self._prefilter = PreFilter(config.prefilter, config.siem)
         self.correlator = CorrelationEngine(config.correlation)
         self._result = PipelineResult()
 
     def process(self, record: RawRecord) -> None:
         """Run one raw record through normalize -> prefilter -> correlate."""
+        if record.envelope is not None:
+            key = record.envelope.canonical_event_id
+            if key in self._seen_events:
+                return  # idempotent intake: already correlated
         self._result.ingested += 1
         alert = self._adapter_for(record).parse(record)
         if record.envelope is not None:
@@ -89,9 +99,38 @@ class Pipeline:
         decision = self._prefilter.evaluate(alert)
         if decision.suppressed:
             self._result.suppressed += 1
+            self._remember(record)
             return
         self.correlator.add(alert)
         self._result.correlated += 1
+        self._remember(record)
+
+    def revise(self, record: RawRecord) -> Revision:
+        """Apply an updated payload of an alert this pipeline already took in.
+
+        Returns ``Revision("not_seen")`` if the original has not been
+        processed yet (the caller retries later, so order is preserved).
+        """
+        if record.envelope is not None and (
+            record.envelope.canonical_event_id not in self._seen_events
+        ):
+            return Revision("not_seen")
+        alert = self._adapter_for(record).parse(record)
+        if record.envelope is not None:
+            alert = self._attach_provenance(alert, record)
+        outcome = self.correlator.revise(alert)
+        if outcome.kind != "unknown":
+            self._result.revised += 1
+        return outcome
+
+    MAX_SEEN_EVENTS = 200_000
+
+    def _remember(self, record: RawRecord) -> None:
+        if record.envelope is None:
+            return
+        self._seen_events[record.envelope.canonical_event_id] = None
+        while len(self._seen_events) > self.MAX_SEEN_EVENTS:
+            self._seen_events.pop(next(iter(self._seen_events)))
 
     def _adapter_for(self, record: RawRecord):
         if record.source == "file":

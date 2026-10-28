@@ -16,7 +16,7 @@ async def test_migrations_are_idempotent_and_versioned(tmp_path):
     await db.close()
     db = await Database(path).open()                       # re-open: no re-apply
     rows = await db.fetchall("SELECT version FROM schema_migrations")
-    assert [r["version"] for r in rows] == [1]
+    assert [r["version"] for r in rows] == [1, 2, 3]
     mode = await db.fetchone("PRAGMA journal_mode")
     assert list(mode.values())[0] == "wal"
     assert oct(path.stat().st_mode & 0o777) == "0o600"      # owner-only

@@ -28,6 +28,22 @@ from engine.store.database import Database, utcnow
 DESTINATION = "logic_apps"
 
 
+async def current_revision(conn, cluster_id: str) -> int | None:
+    """Latest saved investigation revision (following merges), or None when
+    the investigation is not stored (legacy chains: nothing to compare)."""
+    for _ in range(5):
+        async with conn.execute(
+            "SELECT latest_revision, merged_into FROM investigations "
+            "WHERE cluster_id=?", (cluster_id,)) as cur:
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        if not row["merged_into"]:
+            return int(row["latest_revision"])
+        cluster_id = row["merged_into"]
+    return None
+
+
 def _row_to_action(r: dict[str, Any]) -> ResponseAction:
     return ResponseAction(
         action_id=r["action_id"], scope_id=r["scope_id"],
@@ -44,6 +60,10 @@ def _row_to_action(r: dict[str, Any]) -> ResponseAction:
         expires_at=r["expires_at"],
         transitions=json.loads(r["transitions_json"]),
         created_at=r["created_at"], updated_at=r["updated_at"],
+        remote_status=r.get("remote_status"),
+        remote_status_at=r.get("remote_status_at"),
+        remote_run=json.loads(r["remote_run_json"]) if r.get("remote_run_json") else None,
+        downstream_effect=r.get("downstream_effect") or "not_observed",
     )
 
 
@@ -133,12 +153,18 @@ class ActionService:
     async def approve(self, user: str, role: str, action_id: str,
                       rationale: str = "") -> ResponseAction:
         self._policy.require_role(role, "responder")
-        expired = False
+        refusal = None
         async with self._db.transaction() as conn:
             action = await self._load_locked(action_id)
             self._ensure_open(action)
             if await self._expire_if_due(action):
-                expired = True  # persisted below; raised after the commit
+                refusal = "action has expired and can no longer be approved"
+            elif await self._expire_if_stale(conn, action):
+                # The investigation moved on after this was proposed. A person
+                # must look at the current evidence and propose again.
+                refusal = ("the investigation changed after this action was "
+                           "proposed; review the current evidence and propose "
+                           "it again")
             else:
                 workflow = self._policy.get(action.workflow_id)
                 if workflow.separation_of_duties and user == action.requested_by:
@@ -171,8 +197,8 @@ class ActionService:
                     {"approvals": len(action.approvals),
                      "required": action.approvals_required, "queued": enough,
                      "payload_hash": action.canonical_payload_hash}, commit=False)
-        if expired:
-            raise Conflict("action has expired and can no longer be approved")
+        if refusal:
+            raise Conflict(refusal)
         return await self.get(action_id)
 
     async def reject(self, user: str, role: str, action_id: str,
@@ -246,6 +272,23 @@ class ActionService:
                                      {}, commit=False)
             return True
         return False
+
+    async def _expire_if_stale(self, conn, action: ResponseAction) -> bool:
+        latest = await current_revision(conn, action.cluster_id)
+        if latest is None or latest == action.revision:
+            return False
+        note = (f"investigation moved from revision {action.revision} to {latest} "
+                "before approval")
+        self._move(action, ActionState.EXPIRED, "system", note)
+        await conn.execute(
+            "UPDATE response_actions SET state=?, transitions_json=?, updated_at=?"
+            " WHERE action_id=?", (action.state.value,
+                                   json.dumps(action.transitions), utcnow(),
+                                   action.action_id))
+        await self._audit.append("system", "action.superseded", action.action_id,
+                                 {"proposed_on": action.revision, "current": latest},
+                                 commit=False)
+        return True
 
     @staticmethod
     def _move(action: ResponseAction, new: ActionState, by: str, note: str) -> None:

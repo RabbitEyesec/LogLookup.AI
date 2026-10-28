@@ -20,6 +20,37 @@ STATUS_LIMITED_BY_LICENSE = "limited_by_license"
 STATUS_THROTTLED = "throttled"
 STATUS_UNAVAILABLE = "temporarily_unavailable"
 STATUS_STARTING = "starting"
+#: a known completeness problem is unresolved (partial result, replay, ...)
+STATUS_DEGRADED = "degraded"
+#: acquired data is waiting too long to be correlated
+STATUS_BACKLOGGED = "backlogged"
+
+#: Warning / error codes surfaced in source health (stable, documented).
+PAGE_LIMIT_REACHED = "PAGE_LIMIT_REACHED"
+SNAPSHOT_EXPIRED_REPLAYING = "SNAPSHOT_EXPIRED_REPLAYING"
+CURSOR_NON_ADVANCING = "CURSOR_NON_ADVANCING"
+PARTIAL_RESPONSE = "PARTIAL_RESPONSE"
+UNPARSEABLE_ROW = "UNPARSEABLE_ROW"
+INGESTION_BACKLOG = "INGESTION_BACKLOG"
+CURSOR_RESET_CONFIG_CHANGED = "CURSOR_RESET_CONFIG_CHANGED"
+CURSOR_MIGRATED_FROM_V1 = "CURSOR_MIGRATED_FROM_V1"
+EVENT_TIME_FILTER_ACTIVE = "EVENT_TIME_FILTER_ACTIVE"
+SNAPSHOT_RUNNING = "SNAPSHOT_RUNNING"
+EXPORT_MODE_RETIRED = "EXPORT_MODE_RETIRED"
+FULL_INDEX_TIME_COLLECTION = "FULL_INDEX_TIME_COLLECTION"
+#: the saved cursor belongs to a different query; an administrator decides
+CURSOR_CONFIG_CHANGED = "CURSOR_CONFIG_CHANGED"
+BAD_ROWS_SKIPPED = "BAD_ROWS_SKIPPED"
+
+#: warnings that mean data may be incomplete until they clear
+DEGRADING_WARNINGS = frozenset({
+    SNAPSHOT_EXPIRED_REPLAYING, BAD_ROWS_SKIPPED,
+})
+#: error codes counted as provider completeness failures
+COMPLETENESS_ERRORS = frozenset({
+    PARTIAL_RESPONSE, UNPARSEABLE_ROW, CURSOR_NON_ADVANCING,
+    CURSOR_CONFIG_CHANGED,
+})
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -28,11 +59,14 @@ class ConnectorError(Exception):
     """A source failure with an operator-visible status classification."""
 
     def __init__(self, message: str, *, status: str = STATUS_UNAVAILABLE,
-                 code: str = "source_error", retry_after: float | None = None):
+                 code: str = "source_error", retry_after: float | None = None,
+                 ref: str | None = None):
         super().__init__(message)
         self.status = status
         self.code = code
         self.retry_after = retry_after
+        #: hash of the offending record (never its content) for diagnostics
+        self.ref = ref
 
 
 class ConfigurationError(ConnectorError):
@@ -107,6 +141,9 @@ class PageResult:
     next_cursor: dict[str, Any] | None
     window_complete: bool
     source_warnings: list[str] = field(default_factory=list)
+    #: rows skipped under an administrator's one-window tolerance:
+    #: ``[{"ref": <hash>, "reason": <code>}]`` (diagnostics only)
+    rejected: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

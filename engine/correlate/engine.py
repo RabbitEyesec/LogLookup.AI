@@ -50,6 +50,63 @@ def _alert_evidence(alert: NormalizedAlert) -> dict[str, Any]:
 
 
 @dataclass
+class Revision:
+    """What happened when an updated alert was applied.
+
+    kind: ``buffered`` (swapped before correlation), ``unchanged``,
+    ``rescored`` (same chain, new risk/ATT&CK), ``reclustered`` (identity or
+    time changed and the chain was re-evaluated), ``review`` (could not be
+    applied deterministically - nothing was changed), ``unknown`` (alert is
+    not in live state: suppressed or already pruned).
+    """
+
+    kind: str
+    cluster_id: Optional[str] = None
+    changed: list[str] = field(default_factory=list)
+    reason: str = ""
+
+
+def _what_changed(old: NormalizedAlert, new: NormalizedAlert) -> list[str]:
+    """Names of the security-relevant parts that differ between two versions."""
+    def attacks(a):
+        return sorted(
+            (x.tactic.name if x.tactic else "", x.technique.uid if x.technique else "")
+            for x in a.finding_info.attacks)
+
+    def device(a):
+        d = a.device
+        return (d.hostname, d.uid, d.ip, d.mac) if d else None
+
+    def user(a):
+        u = a.actor.user if a.actor else None
+        return (u.name, u.uid, u.email_addr) if u else None
+
+    def process(a):
+        p = a.actor.process if a.actor else None
+        return (p.uid, p.name, p.cmd_line) if p else None
+
+    def network(a):
+        s, d = a.src_endpoint, a.dst_endpoint
+        return ((s.ip, s.hostname) if s else None, (d.ip, d.hostname) if d else None)
+
+    checks = {
+        "severity": (old.severity_id, new.severity_id),
+        "title": (old.finding_info.title, new.finding_info.title),
+        "attack": (attacks(old), attacks(new)),
+        "process": (process(old), process(new)),
+        "time": (old.time, new.time),
+        "device": (device(old), device(new)),
+        "user": (user(old), user(new)),
+        "network": (network(old), network(new)),
+    }
+    return [name for name, (a, b) in checks.items() if a != b]
+
+
+#: a change to any of these can move an alert to a different chain
+MEMBERSHIP_PARTS = {"time", "device", "user", "network"}
+
+
+@dataclass
 class Cluster:
     """One attack chain."""
 
@@ -266,6 +323,94 @@ class CorrelationEngine:
             ),
         )
         return entities[best_uid].display_name
+
+    # -- revisions ---------------------------------------------------------------
+
+    def revise(self, alert: NormalizedAlert) -> Revision:
+        """Apply an updated payload of an alert that is already known.
+
+        The alert count never changes. Risk, risk breakdown, ATT&CK
+        progression and source confirmation are recomputed from the current
+        evidence. If the change moves the alert (entity or time), membership
+        is re-evaluated, but only when the result is deterministic;
+        otherwise nothing is touched and the caller flags it for review.
+        """
+        uid = alert.uid
+        if uid in self._buffered_uids:  # not correlated yet: swap the copy
+            self._buffer = [item for item in self._buffer if item[1] != uid]
+            insort(self._buffer, (alert.time, uid, alert),
+                   key=lambda item: (item[0], item[1]))
+            return Revision("buffered")
+        old = self._alerts.get(uid)
+        if old is None:
+            return Revision("unknown")
+        cluster_id = self._cluster_of_alert.get(uid)
+        changed = _what_changed(old, alert)
+        if not changed:
+            self._alerts[uid] = alert  # keep the newest description/evidence
+            return Revision("unchanged", cluster_id)
+        if not MEMBERSHIP_PARTS & set(changed):
+            self._alerts[uid] = alert
+            self._refresh_cluster(cluster_id)
+            return Revision("rescored", cluster_id, changed)
+        return self._reevaluate(uid, alert, changed, cluster_id)
+
+    def _refresh_cluster(self, cluster_id: str) -> None:
+        members = set(self._clusters[cluster_id].alert_uids)
+        self._assign_cluster(members)   # same members -> same cluster id
+        self._risk.rescore(self)
+
+    def _reevaluate(self, uid: str, alert: NormalizedAlert, changed: list[str],
+                    cluster_id: str) -> Revision:
+        others = set(self._clusters[cluster_id].alert_uids) - {uid}
+        # 1. taking the alert out must not break its chain into pieces
+        if len(others) > 1:
+            rest = self._graph.subgraph(others).to_undirected()
+            if nx.number_connected_components(rest) > 1:
+                return Revision(
+                    "review", cluster_id, changed,
+                    "the revised alert is the link holding its chain together; "
+                    "moving it would split the chain")
+        # 2. it must still belong to the same chain once placed again
+        if others:
+            live = {self._live_cluster(self._cluster_of_alert[n])
+                    for n in self._neighbours_if_placed(alert)
+                    if n in self._cluster_of_alert}
+            if self._live_cluster(cluster_id) not in live:
+                return Revision(
+                    "review", cluster_id, changed,
+                    "the revised alert would no longer connect to its chain "
+                    "(entity or event time changed)")
+        # 3. safe: take it out and put it back with its new identity and time
+        self._detach(uid)
+        self._insert_alert(alert.time, uid, alert)
+        self._rebuild_clusters([uid])
+        self._risk.rescore(self)
+        return Revision("reclustered",
+                        self._live_cluster(self._cluster_of_alert[uid]), changed)
+
+    def _live_cluster(self, cluster_id: str) -> str:
+        while self._clusters[cluster_id].merged_into:
+            cluster_id = self._clusters[cluster_id].merged_into
+        return cluster_id
+
+    def _neighbours_if_placed(self, alert: NormalizedAlert) -> set[str]:
+        """Alerts it would be linked to if inserted with its new identity/time."""
+        found: set[str] = set()
+        for entity in self.resolver.resolve(alert).entities:
+            line = [t for t in self._timelines.get(entity.uid, []) if t[1] != alert.uid]
+            spot = self._bisect(line, alert.time, alert.uid)
+            if spot > 0 and alert.time - line[spot - 1][0] <= self._window_ms:
+                found.add(line[spot - 1][1])
+            if spot < len(line) and line[spot][0] - alert.time <= self._window_ms:
+                found.add(line[spot][1])
+        return found
+
+    def _detach(self, uid: str) -> None:
+        if self._graph.has_node(uid):
+            self._graph.remove_node(uid)
+        for entity_uid, line in list(self._timelines.items()):
+            self._timelines[entity_uid] = [t for t in line if t[1] != uid]
 
     # -- retention ------------------------------------------------------------
 

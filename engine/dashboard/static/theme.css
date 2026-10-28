@@ -1055,6 +1055,10 @@ mark.search-hit { color: var(--text); background: rgba(255,214,0,.3); }
 .v2-status--throttled { color: var(--sev-medium); border-style: dashed; }
 .v2-status--temporarily_unavailable { color: var(--sev-high); border-color: rgba(255,109,0,.45); }
 .v2-status--starting { color: var(--dim); }
+.v2-status--degraded { color: var(--sev-high); border-color: rgba(255,109,0,.55); }
+.v2-status--backlogged { color: var(--sev-medium); border-color: rgba(255,171,0,.55); border-style: dashed; }
+.v2-card[data-status="degraded"] { border-left: 2px solid var(--sev-high); }
+.v2-card[data-status="backlogged"] { border-left: 2px solid var(--sev-medium); }
 .v2-card[data-status="permission_denied"] { border-left: 2px solid var(--sev-critical); }
 .v2-card[data-status="temporarily_unavailable"],
 .v2-card[data-status="throttled"] { border-left: 2px solid var(--sev-medium); }

@@ -54,6 +54,14 @@ export async function renderInvestigationV2(root, clusterId) {
           el("span", { class: "v2-meta" }, `revision ${d.revision} · ${d.status}`)),
         d.resolved_from ? el("div", { class: "v2-meta" }, `Resolved from merged id ${d.resolved_from}`) : null,
         el("div", { class: "v2-badges" }, (chain.sources || []).map((s) => providerBadge(s.provider, s.alert_count))),
+        d.ai_stale ? el("div", { class: "v2-meta v2-meta--warn" },
+          d.ai_stale_reason || "The AI analysis is out of date.") : null,
+        ...(d.review_flags || []).map((f) => el("div", { class: "v2-meta v2-meta--warn" },
+          `Needs review: ${f.reason}`,
+          el("button", { onclick: async () => {
+            await v2Send(`/investigations/${encodeURIComponent(clusterId)}/review-flags/${f.flag_id}/resolve`, "POST");
+            renderInvestigationV2(root, clusterId);
+          } }, "Mark reviewed"))),
         el("div", { class: "v2-meta" }, `Owner: ${d.owner || "unassigned"}`)),
       breakdownTable(chain.risk_breakdown),
       el("div", { class: "v2-card" }, el("h3", {}, "Identity context (not detections)"),

@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 LOG_ANALYTICS_SCOPE = "https://api.loganalytics.azure.com/.default"
 LOGIC_APPS_SCOPE = "https://logic.azure.com/.default"
+#: Azure Resource Manager, per cloud: (API host, token scope)
+ARM_CLOUDS = {
+    "public": ("management.azure.com", "https://management.azure.com/.default"),
+    "usgov": ("management.usgovcloudapi.net",
+              "https://management.usgovcloudapi.net/.default"),
+    "china": ("management.chinacloudapi.cn",
+              "https://management.chinacloudapi.cn/.default"),
+}
 
 REFRESH_SKEW_SECONDS = 300
 

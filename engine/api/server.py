@@ -74,7 +74,7 @@ def create_app(
     :class:`engine.settings.ManagedSettings` instance in managed mode
     (None for the dev CLI — nothing persists then).
     """
-    app = FastAPI(title="LogLookup AI", version="2.0.0", docs_url="/api/docs",
+    app = FastAPI(title="LogLookup AI", version="2.0.1", docs_url="/api/docs",
                   openapi_url="/api/openapi.json", lifespan=lifespan)
     app.state.config = config
     app.state.service = service

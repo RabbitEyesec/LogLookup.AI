@@ -130,7 +130,11 @@ sources:
     options:
       management_url: https://splunk.example.invalid:8089
       indexes: [notable]             # allowlisted indexes only
-      search_mode: export            # export | jobs
+      search_mode: jobs              # snapshot search job (the only supported mode)
+      # Events whose _time is older than this at collection are excluded. It is
+      # reported as EVENT_TIME_FILTER_ACTIVE. 0 = no event-time floor (collect
+      # purely by index time; costs more on large indexes).
+      max_event_age_seconds: 86400
   - id: defender-xdr
     provider: defender_xdr            # Microsoft Graph Security alerts_v2 + incidents
     enabled: false

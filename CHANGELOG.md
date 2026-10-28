@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+Operating decisions and the two remaining features from the reliability plan. No new integrations; schema migration 3 is additive.
+
+### Operating decisions
+
+- **A bad source row stays fail-closed.** A row without a trustworthy identity stops its page; the cursor does not move and no identity is invented. The source shows `degraded`, backs off, and keeps a code and a hash of the row in `source_errors`. Administrators can `retry` now, or allow `skip-bad-rows` for exactly one window (each skipped row hashed and recorded, audited), or run a bounded backfill. Other sources are unaffected.
+- **Splunk event-time floor** stays 86400 s by default; `0` collects purely by index time. The active setting is shown on the source card and in health (`EVENT_TIME_FILTER_ACTIVE` / `FULL_INDEX_TIME_COLLECTION`), and a backfill can carry its own floor.
+- **A changed workspace, index set or query no longer resets a cursor automatically.** The page fails with `CURSOR_CONFIG_CHANGED`, the original cursor (and Splunk job) is preserved, and an administrator confirms a new scan (old cursor kept in `source_cursor_history`, decision audited) or runs a bounded backfill.
+- **Elastic**: `elastic-default` and its `state.json` cursor are never migrated or overwritten and cannot be backfilled; managed Elastic connections can.
+
+### Added - alert revision-aware re-scoring
+
+- An updated vendor payload is detected by canonical id and payload hash, applied to the same finding (alert count unchanged), and re-scores its chain: risk, risk breakdown, ATT&CK progression, independent-source confirmation.
+- Entity or event-time changes re-evaluate membership only when deterministic; otherwise nothing is rewritten and a **review flag** is raised (`/review-flags`).
+- A new investigation revision is saved only on a material change and records the previous revision and score, the trigger (source revision and hash), the rule version, and the source revision each alert was scored from. Earlier investigation revisions and source payloads remain readable (`/revisions`, `/evidence/{id}/revisions/{n}`).
+- AI analyses written before a material change are marked stale (kept, not re-run). Pending response proposals are re-checked against the current investigation revision before approval and before dispatch and expire if it moved; in-flight actions are untouched.
+
+### Added - Azure Logic Apps run-status lookup
+
+- Read-only Azure Resource Manager adapter for Consumption and Standard, authenticating with a managed identity or service principal. Runs are matched only by run id or by the client tracking id LogLookup now sends; zero or several matches select nothing.
+- `POST /api/v2/actions/{id}/check-status` (responder, audited) and a **Check remote status** button. Azure's status (Running, Waiting, Succeeded, Failed, Cancelled, TimedOut) is stored apart from the local action state and from `downstream_effect`.
+- Only a unique Running/Waiting/Succeeded run finalises an ambiguous action (to `acknowledged`, delivery proven). Succeeded does not prove the downstream effect; Failed/TimedOut/Cancelled never become `failed_without_effect`; the request is never resent. `downstream_effect` is set only by a person.
+
+### Fixed
+
+- An administrator retry or skip that arrived while a poll was running was lost (the wake flag was cleared before waiting).
+
+## 2.0.1 - 2026-10-28
+
+Reliability patch. No new integrations; every v2.0.0 API, route and stored record is preserved. Schema migration 2 is additive.
+
+### Fixed
+
+- **Sentinel**: a capped page could skip rows sharing the last `TimeGenerated` (the cursor held a timestamp only, and a blocked page advanced it by one microsecond). Paging now uses a total `(TimeGenerated, SystemAlertId)` order with a composite seek applied after the per-alert `summarize`, a frozen window per scan, and the provider's own 100 ns timestamp string. Partial or truncated Azure Monitor results, unkeyed rows and non-advancing pages fail closed: the cursor does not move and the source reports `degraded`.
+- **Splunk**: collection no longer caps inside SPL (`| head`) and hops `_indextime` forward. One snapshot search job per bounded index-time window is created, kept alive and paged by `sid` + `offset`; it is released only when drained. A vanished job replays the same frozen window from offset 0 (`SNAPSHOT_EXPIRED_REPLAYING`). A saved `sid` is never used against changed search settings. The streaming export path, which silently dropped malformed lines, is retired (`search_mode: export` now runs the job path and reports `EXPORT_MODE_RETIRED`). Unidentifiable or malformed results fail the page instead of being skipped or identified by content hash. The event-time floor is explicit (`EVENT_TIME_FILTER_ACTIVE`) and can be disabled with `max_event_age_seconds: 0`.
+- **Ledger to correlation**: the evidence, the source cursor and a durable work item now commit in one transaction, and a consumer drains the queue into the correlator. A crash or a correlator error after the commit no longer leaves an acquired detection that will never be correlated. Intake is idempotent per canonical event; newer revisions are recorded (`superseded`) and never counted as a second alert; each revision keeps an immutable encrypted payload. Retention never drops a payload that unresolved work still needs.
+- **Response**: the dispatcher claims an item and moves its action to `dispatching` atomically, and settles action state, outbox state and audit in one transaction with compare-and-set. Startup recovery reconciles each open outbox row against the action's real state (repairs terminal pairs, queues untouched items, sends ambiguous ones to `reconciliation_required`, flags inconsistent rows) and never resends.
+- **Health**: a completed poll no longer reports `lag_seconds = 0.0`. Lag comes from the committed watermark (`null` when there is none).
+
+### Added
+
+- Cursor format v2 (versioned, fingerprinted); v2.0.0 cursors migrate by a bounded overlap re-read (`CURSOR_MIGRATED_FROM_V1`); a changed workspace/index set/template starts fresh (`CURSOR_RESET_CONFIG_CHANGED`).
+- Source statuses `degraded` and `backlogged`; per-stream window, watermark, lag, continuation mode and snapshot progress; acquisition counters (received, new, updated, duplicate, unchanged, quarantined, pages drained, provider partial errors); correlation queue depth and oldest-pending age, per source and in `/api/v2/metrics`.
+- Administrator-only bounded backfill: `POST/GET /api/v2/connections/{id}/backfill` (paused source, UTC interval, at most 7 days, audited, never writes the live cursor).
+- Migration 2: `source_event_revisions`, `ingest_work_items`.
+
+### Changed
+
+- `search_mode` for Splunk defaults to `jobs`.
+- Correlation is a durable asynchronous stage; `V2Runtime.drain_work()` waits for it.
+
+### Not changed
+
+OCSF mapping, correlation heuristics, MITRE retrieval, AI prompts, Defender/Entra connectors and auth, the v1 Elastic path, and every existing API payload (new health fields are additive).
+
 ## 2.0.0 - 2026-10-28
 
 Multi-source investigation platform. Backward compatible with 0.3.0 configurations, result documents and deep links.

@@ -18,11 +18,24 @@ from engine.store.database import Database, utcnow
 
 def content_hash(summary: dict[str, Any]) -> str:
     """Hash of the chain state that defines a revision (not timestamps)."""
+    breakdown = summary.get("risk_breakdown") or {}
     basis = {
         "alerts": [a["uid"] for a in summary.get("alerts", [])],
         "surfaced": summary.get("surfaced"),
         "risk": round(float(summary.get("risk_score", 0)), 3),
         "disposition": summary.get("disposition"),
+        "tactics": summary.get("tactic_sequence"),
+        "components": {k: round(float(v), 3) for k, v in breakdown.items()
+                       if isinstance(v, (int, float)) and k != "total"},
+        "providers": breakdown.get("independent_providers"),
+        # who each alert is about: a changed host or user is a material change
+        "entities": [[a["uid"], sorted(a.get("entities", []))]
+                     for a in summary.get("alerts", [])],
+        "primary_entity": summary.get("primary_entity"),
+        # an unresolved review flag is a state change analysts must see
+        "review_open": summary.get("review_open", 0),
+        # note: source revision numbers are NOT part of this. A payload that
+        # changes nothing security-relevant must not create a new revision.
     }
     return hashlib.sha256(
         json.dumps(basis, sort_keys=True).encode()
@@ -71,8 +84,15 @@ class InvestigationStore:
 
     async def sync(self, summaries: list[dict[str, Any]],
                    anchors: dict[str, str],
-                   merged: dict[str, str]) -> dict[str, int]:
-        """Persist the live correlation state; returns cluster -> revision."""
+                   merged: dict[str, str],
+                   causes: dict[str, list[dict[str, Any]]] | None = None
+                   ) -> dict[str, int]:
+        """Persist the live correlation state; returns cluster -> revision.
+
+        ``causes`` names the alert revisions that triggered a change, so the
+        new investigation revision can say why it exists.
+        """
+        causes = causes or {}
         now = utcnow()
         revisions: dict[str, int] = {}
         async with self._db.transaction() as conn:
@@ -80,8 +100,8 @@ class InvestigationStore:
                 cid = summary["cluster_id"]
                 chash = content_hash(summary)
                 row = await self._db.fetchone(
-                    "SELECT latest_revision FROM investigations WHERE cluster_id=?",
-                    (cid,),
+                    "SELECT latest_revision, risk_score FROM investigations "
+                    "WHERE cluster_id=?", (cid,),
                 )
                 anchor = next(
                     (uid for uid, c in anchors.items() if c == cid), None
@@ -103,11 +123,14 @@ class InvestigationStore:
                     "WHERE cluster_id=? AND revision=?", (cid, latest),
                 ) if latest else None
                 if last is None or last["content_hash"] != chash:
+                    previous = ({"revision": latest, "risk_score": row["risk_score"]}
+                                if row is not None and latest else None)
                     latest += 1
                     await conn.execute(
                         "INSERT INTO investigation_revisions VALUES (?,?,?,?,?)",
                         (cid, latest, chash,
-                         json.dumps(_revision_summary(summary), default=str), now),
+                         json.dumps(_revision_summary(
+                             summary, previous, causes.get(cid)), default=str), now),
                     )
                     await conn.execute(
                         "UPDATE investigations SET latest_revision=?, risk_score=?,"
@@ -180,6 +203,51 @@ class InvestigationStore:
                  r["source_url"]),
             )
 
+    # -- revisions and review flags ---------------------------------------------
+
+    async def revisions(self, cluster_id: str) -> list[dict[str, Any]]:
+        rows = await self._db.fetchall(
+            "SELECT revision, content_hash, summary_json, created_at FROM "
+            "investigation_revisions WHERE cluster_id=? ORDER BY revision",
+            (cluster_id,))
+        for r in rows:
+            r["summary"] = json.loads(r.pop("summary_json"))
+        return rows
+
+    async def flag_review(self, cluster_id: str, canonical_event_id: str,
+                          revision: int, reason: str,
+                          details: dict[str, Any]) -> None:
+        async with self._db.transaction() as conn:
+            await conn.execute(
+                "INSERT INTO investigation_review_flags (cluster_id,"
+                " canonical_event_id, revision, reason, details_json, created_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (cluster_id, canonical_event_id, revision, reason,
+                 json.dumps(details, default=str), utcnow()))
+
+    async def review_flags(self, cluster_id: str,
+                           include_resolved: bool = False) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM investigation_review_flags WHERE cluster_id=?"
+        if not include_resolved:
+            sql += " AND resolved_at IS NULL"
+        rows = await self._db.fetchall(sql + " ORDER BY flag_id", (cluster_id,))
+        for r in rows:
+            r["details"] = json.loads(r.pop("details_json"))
+        return rows
+
+    async def open_flag_counts(self) -> dict[str, int]:
+        rows = await self._db.fetchall(
+            "SELECT cluster_id, COUNT(*) AS n FROM investigation_review_flags "
+            "WHERE resolved_at IS NULL GROUP BY cluster_id")
+        return {r["cluster_id"]: int(r["n"]) for r in rows}
+
+    async def resolve_flag(self, flag_id: int, user: str) -> bool:
+        async with self._db.transaction() as conn:
+            cur = await conn.execute(
+                "UPDATE investigation_review_flags SET resolved_at=?, resolved_by=? "
+                "WHERE flag_id=? AND resolved_at IS NULL", (utcnow(), user, flag_id))
+        return (cur.rowcount or 0) > 0
+
     # -- analyst records (revisioned, append-only) ------------------------------
 
     async def add_note(self, cluster_id: str, revision: int, author: str,
@@ -212,9 +280,22 @@ class InvestigationStore:
         )
 
 
-def _revision_summary(summary: dict[str, Any]) -> dict[str, Any]:
+def _revision_summary(summary: dict[str, Any], previous: dict[str, Any] | None = None,
+                      causes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Immutable per-revision snapshot: ids and scores, not raw evidence."""
+    breakdown = summary.get("risk_breakdown") or {}
     return {
+        # old/new score, what triggered this revision, and exactly which
+        # source revision of every alert it was computed from
+        "previous": previous,
+        "triggered_by": causes or [],
+        "rule_version": breakdown.get("rule_version"),
+        "source_revisions": {
+            a["uid"]: {k: (a.get("source") or {}).get(k)
+                       for k in ("canonical_event_id", "revision", "raw_sha256",
+                                 "provider", "connection_id")}
+            for a in summary.get("alerts", []) if a.get("source")},
+        "review_open": summary.get("review_open", 0),
         "cluster_id": summary["cluster_id"],
         "alert_uids": [a["uid"] for a in summary.get("alerts", [])],
         "risk_score": summary.get("risk_score"),

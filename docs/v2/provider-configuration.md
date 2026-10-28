@@ -52,12 +52,13 @@ Requires **Log Analytics Reader** on the workspace (Azure RBAC). Only tables wit
   options:
     management_url: https://splunk.example:8089
     indexes: [notable]               # allowlisted names only
-    search_mode: export              # export | jobs
+    search_mode: jobs                # snapshot search job (export is retired and runs as jobs)
     api_namespace: { owner: nobody, app: SplunkEnterpriseSecuritySuite }  # optional
-    max_event_age_seconds: 86400
+    max_event_age_seconds: 86400     # 0 = no event-time floor (collect purely by index time)
+    max_results: 500                 # results fetched per page from the snapshot job
 ```
 
-Needs a Splunk authentication token whose role may search the listed indexes. Index names are validated against a strict pattern, so `main | delete` cannot reach SPL. TLS is verified; supply a private CA with `tls.ca_bundle_path` rather than disabling verification. Site-specific field names are mapped with the adapter's `field_aliases`.
+Needs a Splunk authentication token whose role may search the listed indexes and read search jobs it created. `max_event_age_seconds` is an explicit event-time floor (reported as `EVENT_TIME_FILTER_ACTIVE` and shown on the source card); an event indexed today whose `_time` is older than the floor is excluded by design. `0` removes the floor (`FULL_INDEX_TIME_COLLECTION`): complete by index time, but slower and costlier on large indexes. A controlled backfill can set its own floor without touching this setting. Index names are validated against a strict pattern, so `main | delete` cannot reach SPL. TLS is verified; supply a private CA with `tls.ca_bundle_path` rather than disabling verification. Site-specific field names are mapped with the adapter's `field_aliases`.
 
 ## Microsoft Defender XDR
 
