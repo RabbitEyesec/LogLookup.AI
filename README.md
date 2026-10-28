@@ -9,6 +9,7 @@ Elastic Security, Microsoft Sentinel, Splunk, Defender XDR and Entra ID in. Evid
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-3776AB)](#installation)
 [![OCSF](https://img.shields.io/badge/schema-OCSF%20Detection%20Finding-2563EB)](https://schema.ocsf.io/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+[![Tests](https://github.com/RabbitEyesec/LogLookup.AI/actions/workflows/tests.yml/badge.svg)](https://github.com/RabbitEyesec/LogLookup.AI/actions/workflows/tests.yml)
 
 </div>
 
